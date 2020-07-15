@@ -51,11 +51,11 @@ namespace FFmpeg
 
             std::string poll_error();
 
-            const AVFormatContext *get_format_context() const;
-            const AVCodecContext *get_codec_context() const;
+            const AVFormatContext *format_context() const;
+            const AVCodecContext *codec_context() const;
 
-            enum AVMediaType get_media_type() const;
-            std::string get_filename() const;
+            enum AVMediaType media_type() const;
+            std::string filename() const;
             bool end_of_file_reached() const;
 
         private:

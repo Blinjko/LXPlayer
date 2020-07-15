@@ -325,13 +325,13 @@ namespace FFmpeg
 
     // The following functions are just getters
 
-    const AVFormatContext *Decoder::get_format_context() const { return m_fmt_ctx; }
+    const AVFormatContext *Decoder::format_context() const { return m_fmt_ctx; }
 
-    const AVCodecContext *Decoder::get_codec_context() const { return m_codec_ctx; }
+    const AVCodecContext *Decoder::codec_context() const { return m_codec_ctx; }
 
-    enum AVMediaType Decoder::get_media_type() const { return m_media_type; }
+    enum AVMediaType Decoder::media_type() const { return m_media_type; }
 
-    std::string Decoder::get_filename() const { return m_filename; }
+    std::string Decoder::filename() const { return m_filename; }
 
     bool Decoder::end_of_file_reached() const { return m_end_of_file; }
 

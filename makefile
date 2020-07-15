@@ -7,7 +7,8 @@ SDL_INCLUDE = include/sdl/
 CXX = g++
 CXXFLAGS = -Wextra -Wall -Wpedantic -Iinclude/
 
-all: $(FFMPEG_SRC)$(wildcard *.cpp) $(FFMPEG_INCLUDE)$(wildcard *.h) $(wildcard *.o)
+all: $(wildcard *.o)
+	@echo "Built all"
 
 color_converter.o: $(FFMPEG_SRC)color_converter.cpp $(FFMPEG_INCLUDE)color_converter.h
 	g++ -c $(CXXFLAGS) $(FFMPEG_SRC)color_converter.cpp
