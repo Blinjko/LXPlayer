@@ -1,30 +1,31 @@
 
-FFMPEG_SRC = src/ffmpeg/
-FFMPEG_INCLUDE = include/ffmpeg/
+FFMPEG_SRC_DIR = src/ffmpeg/
+FFMPEG_INCLUDE_DIR = include/ffmpeg/
 
-PORTAUDIO_SRC = src/portaudio/
-PORTAUDIO_INCLUDE = include/portaudio/
+PORTAUDIO_SRC_DIR = src/portaudio/
+PORTAUDIO_INCLUDE_DIR = include/portaudio/
 
-SDL_SRC = src/sdl/
-SDL_INCLUDE = include/sdl/
+SDL_SRC_DIR = src/sdl/
+SDL_INCLUDE_DIR = include/sdl/
 
 CXX = g++
 CXXFLAGS = -Wextra -Wall -Wpedantic -Iinclude/
 
-all: $(wildcard *.o)
-	@echo "Built all"
+OBJECT_FILES = decoder.o resampler.o color_converter.o playback.o
 
-color_converter.o: $(FFMPEG_SRC)color_converter.cpp $(FFMPEG_INCLUDE)color_converter.h
-	g++ -c $(CXXFLAGS) $(FFMPEG_SRC)color_converter.cpp
+all: $(OBJECT_FILES)
 
-decoder.o: $(FFMPEG_SRC)decoder.cpp $(FFMPEG_INCLUDE)decoder.h
-	g++ -c $(CXXFLAGS) $(FFMPEG_SRC)decoder.cpp
+decoder.o: $(FFMPEG_SRC_DIR)decoder.cpp $(FFMPEG_INCLUDE_DIR)decoder.h
+	$(CXX) $(CXXFLAGS) -c $(FFMPEG_SRC_DIR)decoder.cpp
 
-resampler.o: $(FFMPEG_SRC)resampler.cpp $(FFMPEG_INCLUDE)resampler.h
-	g++ -c $(CXXFLAGS) $(FFMPEG_SRC)resampler.cpp
+resampler.o: $(FFMPEG_SRC_DIR)resampler.cpp $(FFMPEG_INCLUDE_DIR)resampler.h
+	$(CXX) $(CXXFLAGS) -c $(FFMPEG_SRC_DIR)resampler.cpp
 
-playback.o: $(PORTAUDIO_SRC)playback.cpp $(PORTAUDIO_INCLUDE)playback.h
-	g++ -c $(CXXFLAGS) $(PORTAUDIO_SRC)playback.cpp
+color_converter.o: $(FFMPEG_SRC_DIR)color_converter.cpp $(FFMPEG_INCLUDE_DIR)color_converter.h
+	$(CXX) $(CXXFLAGS) -c $(FFMPEG_SRC_DIR)color_converter.cpp
+
+playback.o: $(PORTAUDIO_SRC_DIR)playback.cpp $(PORTAUDIO_INCLUDE_DIR)playback.h
+	$(CXX) $(CXXFLAGS) -c $(PORTAUDIO_SRC_DIR)playback.cpp
 
 clean:
 	rm *.o

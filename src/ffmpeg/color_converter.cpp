@@ -235,38 +235,33 @@ namespace FFmpeg
 
 
     // A BIT OF INFORMATION //
-    // The next 14 functions below need a bit of explaining.
-    // These functions return references to the data members of an Color_Converter class, and
-    // are used to get information and set information.
-    // If you look closely they return references, not copies, so if you
-    // want to change a data member of a Color_Converter class instance, then call the appropiate function below
-    // and set the variable like any other, simple, easy, less code. :D
-    // HOWEVER if you want your changed option to take effect you must initialize or reinitialize the Color_Converter class instance
-    // If you would like to reset all members at once, please use the Color_Converter::reset() function
+    // The following functions are getters and setters used to get and set member variables
+    // NOTE: getters are not prefixed with get
+    // NOTE: setters are prefixed with set
+    // If any varialbes are changed using setters, Color_Coverter::init() must be called (again) for changes to be applied
     // INFORMATION BIT OVER //
 
     // There will be no comments for these functions as they are simple and mostly explained above //
-    int &Color_Converter::source_width() { return m_src_width; }
-    const int &Color_Converter::source_width() const { return m_src_width; }
 
-    int &Color_Converter::source_height() { return m_src_height; }
-    const int &Color_Converter::source_height() const { return m_src_height; }
+    int Color_Converter::source_width() const { return m_src_width; }
+    void Color_Converter::set_source_width(int width) { m_src_width = width; }
 
-    enum AVPixelFormat &Color_Converter::source_pixel_format() { return m_src_pixel_format; }
-    const enum AVPixelFormat &Color_Converter::source_pixel_format() const { return m_src_pixel_format; }
+    int Color_Converter::source_height() const { return m_src_height; }
+    void Color_Converter::set_source_height(int height) { m_src_height = height; }
 
+    enum AVPixelFormat Color_Converter::source_pixel_format() const { return m_src_pixel_format; }
+    void Color_Converter::set_source_pixel_format(enum AVPixelFormat pixel_format) { m_src_pixel_format = pixel_format; }
 
-    int &Color_Converter::destination_width() { return m_dst_width; }
-    const int &Color_Converter::destination_width() const { return m_dst_width; }
+    int Color_Converter::destination_width() const { return m_dst_width; }
+    void Color_Converter::set_destination_width(int width) { m_dst_width = width; }
 
-    int &Color_Converter::destination_height() { return m_dst_height; }
-    const int &Color_Converter::destination_height() const { return m_dst_height; }
+    int Color_Converter::destination_height() const { return m_dst_height; }
+    void Color_Converter::set_destination_height(int height) { m_dst_height = height; }
 
-    enum AVPixelFormat &Color_Converter::destination_pixel_format() { return m_dst_pixel_format; }
-    const enum AVPixelFormat &Color_Converter::destination_pixel_format() const { return m_dst_pixel_format; }
+    enum AVPixelFormat Color_Converter::destination_pixel_format() const { return m_dst_pixel_format; }
+    void Color_Converter::set_destination_pixel_format(enum AVPixelFormat pixel_format) { m_dst_pixel_format = pixel_format; }
 
-    struct SwsContext *Color_Converter::sws_context() { return m_sws_ctx; }
-    const struct SwsContext *Color_Converter::sws_context() const { return m_sws_ctx; }
+    const struct SwsContext * Color_Converter::sws_context() const { return m_sws_ctx; }
 
     /* Color_Converter poll_error function
      * @desc - poll an std::string error message from the m_errors queue, poll and error message

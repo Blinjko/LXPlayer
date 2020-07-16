@@ -48,23 +48,23 @@ namespace FFmpeg
             void reset_options(int64_t, enum AVSampleFormat, int, int64_t, enum AVSampleFormat, int);
 
 
-            int64_t &out_channel_layout();
-            const int64_t &out_channel_layout() const;
+            int64_t out_channel_layout() const;
+            void set_out_channel_layout(int64_t);
 
-            enum AVSampleFormat &out_sample_format();
-            const enum AVSampleFormat &out_sample_format() const;
+            enum AVSampleFormat out_sample_format() const;
+            void set_out_sample_format(enum AVSampleFormat);
 
-            int &out_sample_rate();
-            const int &out_sample_rate() const;
+            int out_sample_rate() const;
+            void set_out_sample_rate(int);
 
-            int64_t &in_channel_layout();
-            const int64_t &in_channel_layout() const;
+            int64_t in_channel_layout() const;
+            void set_in_channel_layout(int64_t);
 
-            enum AVSampleFormat &in_sample_format();
-            const enum AVSampleFormat &in_sample_format() const;
+            enum AVSampleFormat in_sample_format() const;
+            void set_in_sample_format(enum AVSampleFormat);
 
-            int &in_sample_rate();
-            const int &in_sample_rate() const;
+            int in_sample_rate() const;
+            void set_in_sample_rate(int);
 
             //struct SwrContext *swr_context();
             const struct SwrContext *swr_context() const;

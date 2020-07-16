@@ -181,31 +181,28 @@ namespace FFmpeg
 
 
     // BIT OF INFORMATION //
-    // The following 13 functions return references to member variables.
-    // If you would like to change an option of a Frame_Resampler class instance,
-    // call the apropriate function and assign the value you would like.
-    // This works becuase they return references to the actual member variable in the used Frame_Resampler class instance
-    // After you have set your options using these functions you must call Frame_Resampler::init() function again for the options to take affect
-    // ALSO these functions are simple, so there wont be any above function comments
-    // BIT OF INFORMATION END //
+    // The following functions are getters and setters
+    // NOTE: getters are not prexfixed with get
+    // NOTE: setters are prefixed with set
+    // After you reset any varialbes using setters, make sure to call Frame_Resampler::init() again for changes to apply
 
-    int64_t &Frame_Resampler::out_channel_layout() { return m_out_channel_layout; }
-    const int64_t &Frame_Resampler::out_channel_layout() const { return m_out_channel_layout; }
+    int64_t Frame_Resampler::out_channel_layout() const { return m_out_channel_layout; }
+    void Frame_Resampler::set_out_channel_layout(int64_t channel_layout) { m_out_channel_layout = channel_layout; }
 
-    enum AVSampleFormat &Frame_Resampler::out_sample_format() { return m_out_sample_format; }
-    const enum AVSampleFormat &Frame_Resampler::out_sample_format() const { return m_out_sample_format; }
+    enum AVSampleFormat Frame_Resampler::out_sample_format() const { return m_out_sample_format; }
+    void Frame_Resampler::set_out_sample_format(enum AVSampleFormat sample_format) { m_out_sample_format = sample_format; }
 
-    int &Frame_Resampler::out_sample_rate() { return m_out_sample_rate; }
-    const int &Frame_Resampler::out_sample_rate() const { return m_out_sample_rate; }
+    int Frame_Resampler::out_sample_rate() const { return m_out_sample_rate; }
+    void Frame_Resampler::set_out_sample_rate(int sample_rate) { m_out_sample_rate = sample_rate; }
 
-    int64_t &Frame_Resampler::in_channel_layout() { return m_in_channel_layout; }
-    const int64_t &Frame_Resampler::in_channel_layout() const { return m_in_channel_layout; }
+    int64_t Frame_Resampler::in_channel_layout() const { return m_in_channel_layout; }
+    void Frame_Resampler::set_in_channel_layout(int64_t channel_layout) { m_in_channel_layout = channel_layout; }
 
-    enum AVSampleFormat &Frame_Resampler::in_sample_format() { return m_in_sample_format; }
-    const enum AVSampleFormat &Frame_Resampler::in_sample_format() const { return m_in_sample_format; }
+    enum AVSampleFormat Frame_Resampler::in_sample_format() const { return m_in_sample_format; }
+    void Frame_Resampler::set_in_sample_format(enum AVSampleFormat sample_format) { m_in_sample_format = sample_format; }
 
-    int &Frame_Resampler::in_sample_rate() { return m_in_sample_rate; }
-    const int &Frame_Resampler::in_sample_rate() const { return m_in_sample_rate; }
+    int Frame_Resampler::in_sample_rate() const { return m_in_sample_rate; }
+    void Frame_Resampler::set_in_sample_rate(int sample_rate) { m_in_sample_rate = sample_rate; }
 
     // Cannot change m_swr_ctx :D
     const struct SwrContext *Frame_Resampler::swr_context() const { return m_swr_ctx; }

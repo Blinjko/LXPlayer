@@ -38,26 +38,25 @@ namespace FFmpeg
             Color_Data &convert(const uint8_t *const[], const int[]);
             void reset(int, int, enum AVPixelFormat, int, int, enum AVPixelFormat);
 
-            int &source_width();
-            const int &source_width() const;
+            int source_width() const;
+            void set_source_width(int);
 
-            int &source_height();
-            const int &source_height() const;
+            int source_height() const;
+            void set_source_height(int);
 
-            enum AVPixelFormat &source_pixel_format();
-            const enum AVPixelFormat &source_pixel_format() const;
+            enum AVPixelFormat source_pixel_format() const;
+            void set_source_pixel_format(enum AVPixelFormat);
 
-            
-            int &destination_width();
-            const int &destination_width() const;
+            int destination_width() const;
+            void set_destination_width(int);
 
-            int &destination_height();
-            const int &destination_height() const;
+            int destination_height() const;
+            void set_destination_height(int);
 
-            enum AVPixelFormat &destination_pixel_format();
-            const enum AVPixelFormat &destination_pixel_format() const;
+            enum AVPixelFormat destination_pixel_format() const;
+            void set_destination_pixel_format(enum AVPixelFormat);
 
-            struct SwsContext *sws_context();
+            //struct SwsContext *sws_context();
             const struct SwsContext *sws_context() const;
 
             std::string poll_error();

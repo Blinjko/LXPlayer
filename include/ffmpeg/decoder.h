@@ -18,6 +18,7 @@ enum Return_Status
     STATUS_FAILURE,
 };
 #endif
+
 namespace FFmpeg
 {
     // SEE "ffmpeg_decoder.cpp" for comments on functions //
