@@ -11,7 +11,7 @@ SDL_INCLUDE_DIR = include/sdl/
 CXX = g++
 CXXFLAGS = -Wextra -Wall -Wpedantic -Iinclude/
 
-OBJECT_FILES = decoder.o resampler.o color_converter.o playback.o window.o
+OBJECT_FILES = decoder.o resampler.o color_converter.o playback.o window.o renderer.o
 
 all: $(OBJECT_FILES)
 
@@ -29,6 +29,9 @@ playback.o: $(PORTAUDIO_SRC_DIR)playback.cpp $(PORTAUDIO_INCLUDE_DIR)playback.h
 
 window.o: $(SDL_SRC_DIR)window.cpp $(SDL_INCLUDE_DIR)window.h
 	$(CXX) $(CXXFLAGS) -c $(SDL_SRC_DIR)window.cpp
+
+renderer.o: $(SDL_SRC_DIR)renderer.cpp $(SDL_INCLUDE_DIR)renderer.h
+	$(CXX) $(CXXFLAGS) -c $(SDL_SRC_DIR)renderer.cpp
 
 clean:
 	rm *.o
