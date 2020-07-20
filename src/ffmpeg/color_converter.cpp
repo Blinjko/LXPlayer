@@ -352,3 +352,82 @@ void poll_errors(FFmpeg::Color_Converter &converter)
         error = converter.poll_error();
     }
 }
+
+
+
+
+/* alloc_Color_Data function
+ * @desc - allocated space for an image of the specified width, height and format in the supplied struct
+ * @param data - the Color_Data struct to allocate data for
+ * @param width - the width of the image to be stored 
+ * @param height - the height of the image to be stored
+ * @param format - the AVPixelFormat of the image to be stored
+ * @return - STATUS_SUCCESS on success, STATUS_FAILURE on failure, will print the error
+ */
+Return_Status alloc_Color_Data(FFmpeg::Color_Data &data, int width, int height, enum AVPixelFormat format)
+{
+
+    data.data[0] = nullptr;
+    data.data[1] = nullptr;
+    data.data[2] = nullptr;
+    data.data[3] = nullptr;
+
+    data.linesize[0] = 0;
+    data.linesize[1] = 0;
+    data.linesize[2] = 0;
+    data.linesize[3] = 0;
+
+    int error = 0;
+    error = av_image_alloc(data.data, data.linesize, width, height, format, FFmpeg::IMAGE_ALIGNMENT);
+
+    if(error < 0)
+    {
+        std::cerr << "Failed to allocate image" << std::endl;
+        return STATUS_FAILURE;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+
+
+
+/* copy_Color_Data function
+ * @desc - copies color data from src to dst, dst must be allocated first
+ * @param src - the source to copy from
+ * @param dst - the destination to copy to
+ * @param width - the width of the image contained in src
+ * @param height - the height of the image contained in src
+ * @param format - the pixel format of the image contained in src
+ */
+void copy_Color_Data(FFmpeg::Color_Data &src, FFmpeg::Color_Data &dst, int width, int height, enum AVPixelFormat format)
+{
+    av_image_copy(dst.data,
+                  dst.linesize,
+                  const_cast<const uint8_t**>(src.data),
+                  src.linesize,
+                  format,
+                  width,
+                  height);
+}
+
+
+
+
+/* free_Color_Data function
+ * @desc - frees an allocated Color_Data
+ * @param data - the Color_Data struct to free
+ */
+void free_Color_Data(FFmpeg::Color_Data &data)
+{
+    av_freep(&data.data[0]);
+    data.data[0] = nullptr;
+    data.data[1] = nullptr;
+    data.data[2] = nullptr;
+    data.data[3] = nullptr;
+
+    data.linesize[0] = 0;
+    data.linesize[1] = 0;
+    data.linesize[2] = 0;
+    data.linesize[3] = 0;
+}

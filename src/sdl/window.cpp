@@ -100,7 +100,7 @@ namespace SDL
             enqueue_error(std::string{SDL_GetError()});
             error = 0;
 
-            m_pixel_format = SDL_PIXELFORMAT_UNKOWN;
+            m_pixel_format = SDL_PIXELFORMAT_UNKNOWN;
             m_refresh_rate = -1;
         }
         

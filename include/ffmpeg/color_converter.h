@@ -82,3 +82,7 @@ namespace FFmpeg
 
 // defined in color_converter.cpp
 void poll_errors(FFmpeg::Color_Converter &converter);
+
+Return_Status alloc_Color_Data(FFmpeg::Color_Data&, int, int, enum AVPixelFormat);
+void copy_Color_Data(FFmpeg::Color_Data&, FFmpeg::Color_Data&, int, int, enum AVPixelFormat);
+void free_Color_Data(FFmpeg::Color_Data&);
