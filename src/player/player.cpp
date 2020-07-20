@@ -199,13 +199,13 @@ void audio_thread_func(FFmpeg::Decoder &decoder,
         std::exit(1);
     }
 
-    if(video_available)
+    resampled_frame = resampler.resample_frame(decoded_frame);
+    if(!resampled_frame)
     {
-        std::unique_lock<std::mutex> lock{mutex};
-        start_cv.wait(lock);
-        lock.unlock();
+        poll_errors(resampler);
+        std::exit(1);
     }
-
+    
     status = playback.start_stream();
     if(status == STATUS_FAILURE)
     {
@@ -213,21 +213,28 @@ void audio_thread_func(FFmpeg::Decoder &decoder,
         std::exit(1);
     }
 
+    if(video_available)
+    {
+        std::unique_lock<std::mutex> lock{mutex};
+        start_cv.wait(lock);
+        lock.unlock();
+    }
+
     while(!decoder.end_of_file_reached())
     {
-        resampled_frame = resampler.resample_frame(decoded_frame);
-        if(!resampled_frame)
-        {
-            poll_errors(resampler);
-            std::exit(1);
-        }
-    
         playback.write(resampled_frame->extended_data[0], resampled_frame->nb_samples);
 
         decoded_frame = decoder.decode_frame();
         if(!decoded_frame)
         {
             poll_errors(decoder);
+            std::exit(1);
+        }
+
+        resampled_frame = resampler.resample_frame(decoded_frame);
+        if(!resampled_frame)
+        {
+            poll_errors(resampler);
             std::exit(1);
         }
     }
