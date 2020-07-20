@@ -11,9 +11,9 @@ namespace PortAudio
 
     // A simple struct wrapper around the Pa_Initialize, and Pa_Terminate calls
     // This will ensure Pa_Terminate will be called for every time Pa_Initialize was called
-    struct Initialize
+    struct Initializer
     {
-        Initialize()
+        Initializer()
         {
             PaError error = 0;
             error = Pa_Initialize();
@@ -25,7 +25,7 @@ namespace PortAudio
             }
         }
 
-        ~Initialize()
+        ~Initializer()
         {
             PaError error = 0;
             error = Pa_Terminate();

@@ -8,10 +8,23 @@ PORTAUDIO_INCLUDE_DIR = include/portaudio/
 SDL_SRC_DIR = src/sdl/
 SDL_INCLUDE_DIR = include/sdl/
 
+PLAYER_SRC_DIR = src/player/
+
+FFMPEG_LIBS = -lavformat -lavcodec -lavutil -lswscale -lswresample
+SDL_LIBS = -lSDL2
+PORTAUDIO_LIBS = -lportaudio
+STL_LIBS = -lpthread
+
 CXX = g++
 CXXFLAGS = -Wextra -Wall -Wpedantic -Iinclude/
 
 OBJECT_FILES = decoder.o resampler.o color_converter.o playback.o window.o renderer.o
+
+LXPlayer: $(OBJECT_FILES) $(PLAYER_SRC_DIR)player.cpp
+	$(CXX) $(CXXFLAGS) -c $(PLAYER_SRC_DIR)player.cpp
+	$(CXX) player.o $(OBJECT_FILES) $(FFMPEG_LIBS) $(SDL_LIBS) $(PORTAUDIO_LIBS) $(STL_LIBS) -o LXPlayer
+	make clean
+
 
 all: $(OBJECT_FILES)
 
