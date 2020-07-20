@@ -335,6 +335,8 @@ namespace FFmpeg
 
     bool Decoder::end_of_file_reached() const { return m_end_of_file; }
 
+    int Decoder::stream_number() const { return m_stream_number; }
+
 
 
 

@@ -58,6 +58,7 @@ namespace FFmpeg
             enum AVMediaType media_type() const;
             std::string filename() const;
             bool end_of_file_reached() const;
+            int stream_number() const;
 
         private:
 

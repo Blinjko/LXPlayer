@@ -98,11 +98,17 @@ namespace SDL
         {
             enqueue_error("SDL::Window: Failed to get window display mode");
             enqueue_error(std::string{SDL_GetError()});
-            return STATUS_FAILURE;
+            error = 0;
+
+            m_pixel_format = SDL_PIXELFORMAT_UNKOWN;
+            m_refresh_rate = -1;
         }
         
-        m_pixel_format = mode.format;
-        m_refresh_rate = mode.refresh_rate;
+        else
+        {
+            m_pixel_format = mode.format;
+            m_refresh_rate = mode.refresh_rate;
+        }
 
         return STATUS_SUCCESS;
     }
@@ -246,4 +252,19 @@ namespace SDL
     }
 }
 
-void poll_errors(SDL::Window&);
+
+
+
+/* SDL::Window poll errors function
+ * @desc - polls all the errors out of a SDL::Window class instance and prints them
+ */
+void poll_errors(SDL::Window &window)
+{
+    std::string error{window.poll_error()};
+
+    while(!error.empty())
+    {
+        std::cerr << error << std::endl;
+        error = window.poll_error();
+    }
+}

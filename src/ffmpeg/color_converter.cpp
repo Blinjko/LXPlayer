@@ -30,7 +30,17 @@ namespace FFmpeg
         m_src_width{src_width}, m_src_height{src_height}, m_src_pixel_format{src_pixel_format},
         m_dst_width{dst_width}, m_dst_height{dst_height}, m_dst_pixel_format{dst_pixel_format},
         m_sws_ctx{nullptr}
-    {}
+    {
+        m_dst_data.data[0] = nullptr;
+        m_dst_data.data[1] = nullptr;
+        m_dst_data.data[2] = nullptr;
+        m_dst_data.data[3] = nullptr;
+
+        m_dst_data.linesize[0] = 0;
+        m_dst_data.linesize[1] = 0;
+        m_dst_data.linesize[2] = 0;
+        m_dst_data.linesize[3] = 0;
+    }
 
 
 
