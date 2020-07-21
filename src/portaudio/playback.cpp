@@ -325,6 +325,31 @@ namespace PortAudio
 
 
 
+
+    /* Playback::output_latency() function
+     * @desc - get the latency of the playback stream
+     * @return - a positive PaTime on success negative on failure
+     */
+    PaTime Playback::output_latency()
+    {
+        if(!m_stream)
+        {
+            enqueue_error("PortAudio::Playback: Playback not initialized");
+            return -1.0;
+        }
+
+        const PaStreamInfo *stream_info = Pa_GetStreamInfo(m_stream);
+
+        if(!stream_info)
+        {
+            enqueue_error("Failed to get stream info");
+            return -1.0;
+        }
+
+        return stream_info->outputLatency;
+    }
+
+
     
     /* Playback poll_error function
      * @desc - poll a std::string error message off to m_errors

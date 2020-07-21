@@ -70,6 +70,8 @@ namespace PortAudio
             const void *callback_user_data() const;
             void set_callback_user_data(void*);
 
+            PaTime output_latency();
+
             std::string poll_error();
 
         private:

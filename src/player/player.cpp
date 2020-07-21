@@ -22,6 +22,7 @@
 void audio_thread_func(FFmpeg::Decoder &decoder,
                        bool audio_available,
                        bool video_available,
+                       PaTime &output_latency,
                        std::mutex &mutex,
                        std::condition_variable &start_cv);
 
@@ -29,6 +30,7 @@ void audio_thread_func(FFmpeg::Decoder &decoder,
 void video_thread_func(FFmpeg::Decoder &decoder,
                        bool audio_available,
                        bool video_available,
+                       PaTime &output_latency,
                        std::mutex &mutex,
                        std::condition_variable &start_cv);
 
@@ -87,11 +89,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // variable used to hold audio latency
+    PaTime output_latency {0.0};
+
     // if audio is available start audio playing thread
     std::thread audio_thread{audio_thread_func,
                              std::ref(audio_decoder),
                              audio_available,
                              video_available,
+                             std::ref(output_latency),
                              std::ref(mutex),
                              std::ref(start_cv)};
 
@@ -100,6 +106,7 @@ int main(int argc, char **argv)
                              std::ref(video_decoder),
                              audio_available,
                              video_available,
+                             std::ref(output_latency),
                              std::ref(mutex),
                              std::ref(start_cv)};
 
@@ -126,6 +133,7 @@ int main(int argc, char **argv)
 void audio_thread_func(FFmpeg::Decoder &decoder,
                        bool audio_available,
                        bool video_available,
+                       PaTime &output_latency,
                        std::mutex &mutex,
                        std::condition_variable &start_cv)
 {
@@ -213,6 +221,15 @@ void audio_thread_func(FFmpeg::Decoder &decoder,
         std::exit(1);
     }
 
+    output_latency = playback.output_latency();
+    if(output_latency == -1.0)
+    {
+        poll_errors(playback);
+        std::exit(1);
+    }
+
+    std::cout << "Output Latency: " << output_latency << std::endl;
+
     if(video_available)
     {
         std::unique_lock<std::mutex> lock{mutex};
@@ -255,6 +272,7 @@ void audio_thread_func(FFmpeg::Decoder &decoder,
 void video_thread_func(FFmpeg::Decoder &decoder,
                        bool audio_available,
                        bool video_available,
+                       PaTime &output_latency,
                        std::mutex &mutex,
                        std::condition_variable &start_cv)
 {
@@ -372,6 +390,7 @@ void video_thread_func(FFmpeg::Decoder &decoder,
         start_cv.notify_one();
     }
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<long>(output_latency*1000)));
     // create a time point, will always hold the time the last frame was played
     auto last_time{std::chrono::steady_clock::now()};
 
