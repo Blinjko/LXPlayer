@@ -30,15 +30,12 @@
 #include <ffmpeg/frame.h>
 #include <sdl/sdl.h>
 #include <utility/semaphore.h>
+#include <utility/utility.h>
 
-SDL_Rect get_native_resolution();
+int initialize_decoder(FFmpeg::Decoder&, const std::string&, enum AVMediaType, int);
 
-void initialize_sdl_window(SDL::Window&, SDL::Renderer&);
-void render_frame(SDL::Texture&, SDL::Renderer&, AVFrame*);
-
+int render_yuv_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
 void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
-
-void print_error(int error_number);
 
 void sig_interrupt_handler(int signal)
 {
@@ -61,105 +58,132 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Setup Signals
     std::signal(SIGINT, sig_interrupt_handler);
     std::signal(SIGTERM, sig_terminate_handler);
 
 
-    SDL::Initializer sdl_init{SDL_INIT_VIDEO};
-
-    SDL::Window window{};
-    SDL::Renderer renderer{};
-    SDL::Texture texture{};
-
-    initialize_sdl_window(window, renderer);
-
+    // put passed filename into std::string
     std::string filename{argv[1]};
 
+    // Decoder Setup Start //
+
     FFmpeg::Decoder decoder{};
-
-    int error{0};
-
-    error = decoder.init_format_context(filename, nullptr);
-    print_error(error);
-
-    error = decoder.find_stream(AVMEDIA_TYPE_VIDEO);
-    print_error(error);
-
     int thread_count{1};
+
+    // prompt user for amount of threads to use
     std::cout << "How many decoding threads would you like: ";
     std::cin >> thread_count;
-    error = decoder.init_codec_context(nullptr, thread_count);
-    print_error(error);
 
-    std::cout << "Thread Count: " << decoder.codec_context()->thread_count << std::endl;
+    int error{0};
+    error = initialize_decoder(decoder, filename, AVMEDIA_TYPE_VIDEO, thread_count);
+    Utility::error_assert((error >= 0), "Failed to initialize FFmpeg Decoder", error);
 
-
-    AVFrame *frame{nullptr};
-    while(1)
+    // Fill decoder up with data
+    while(error != AVERROR(EAGAIN))
     {
         error = decoder.send_packet();
-        if(error == AVERROR_EOF)
-        {
-            break;
-        }
-
-        else if(error == AVERROR(EAGAIN))
-        {
-            break;
-        }
-
-        print_error(error);
+        Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to send packet do FFmpeg Decoder", error);
     }
 
+    AVFrame *decoded_frame{nullptr};
+    
+    // get a decoded frame from the decoder
+    error = decoder.receive_frame(&decoded_frame);
+    Utility::error_assert((error >= 0), "Failed to reveive frame from FFmpeg Decoder", error);
 
-    error = decoder.receive_frame(&frame);
-    print_error(error);
+    // Decoder Setup End //
 
-    texture = SDL_CreateTexture(renderer, 
-                                SDL_PIXELFORMAT_YV12,
-                                SDL_TEXTUREACCESS_STATIC,
-                                frame->width,
-                                frame->height);
-    if(!texture)
-    {
-        std::cerr << "Failed to create SDL_Texture: " << SDL_GetError() << std::endl;
-        return 1;
-    }
+    // SDL Setup Start //
+
+    SDL::Initializer sdl_initializer{SDL_INIT_VIDEO};
+
+    SDL::Window window{};
+    std::string window_title{"LXPlayer: "};
+    SDL::Renderer renderer{};
+    SDL::Texture texture{};
+    SDL_Rect display_rect;
+
+    const SDL_Rect screen_resolution{Utility::get_native_resolution()};
+    Utility::error_assert((screen_resolution.w > 0), "Failed to get native screen resolution");
+
+    window_title.append(filename);
+    // create the window
+    window = SDL_CreateWindow(window_title.c_str(),   // Window Title
+                              SDL_WINDOWPOS_CENTERED, // X Position
+                              SDL_WINDOWPOS_CENTERED, // Y Position
+                              screen_resolution.w,    // Width
+                              screen_resolution.h,    // Height
+                              SDL_WINDOW_RESIZABLE);  // Flags
+    Utility::error_assert(window, "Failed to create window");
+
+    // create the renderer
+    renderer = SDL_CreateRenderer(window, // Window to use
+                                  -1,     // Driver Index -1 for auto selection
+                                  SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); // flags
+    Utility::error_assert(renderer, "Failed to create renderer");
+
+    // create a texture
+    texture = SDL_CreateTexture(renderer,                 // Renderer to use
+                                SDL_PIXELFORMAT_YV12,     // Pixel format
+                                SDL_TEXTUREACCESS_STATIC, // Texture access
+                                decoded_frame->width,     // Texture width
+                                decoded_frame->height);   // Texture height
+    Utility::error_assert(texture, "Failed to create texture");
+
+    // set the display rectangle
+    display_rect.x = (screen_resolution.w - decoded_frame->width) / 2;
+    display_rect.y = (screen_resolution.h - decoded_frame->height) / 2;
+    display_rect.w = decoded_frame->width;
+    display_rect.h = decoded_frame->height;
+
+    // SDL Setup End //
 
 
-
+    // Get the timebase, framerate and set a buffer size
     const AVStream *stream{decoder.format_context()->streams[decoder.stream_number()]};
     double timebase{static_cast<double>(stream->time_base.num) / stream->time_base.den};
     int framerate{stream->r_frame_rate.num / stream->r_frame_rate.den};
-    int buffer_size{framerate * 2};
+    int buffer_size{framerate * 2}; // by default the buffersize is enough frames for 2 seconds
 
+    // make an array for the decoded video frames
     FFmpeg::Frame_Array decoded_frames{buffer_size};
 
+    // allocate every frame in the array
+    // This helps with performance by reducing the allocate / deallocate system calls
+    // The frames are allocated once and deallocated once
     for(int i{0}; i != decoded_frames.size(); ++i)
     {
-        error = decoded_frames[i].allocate(static_cast<enum AVPixelFormat>(frame->format),
-                                           frame->width,
-                                           frame->height);
-        print_error(error);
+        error = decoded_frames[i].allocate(static_cast<enum AVPixelFormat>(decoded_frame->format),
+                                           decoded_frame->width,
+                                           decoded_frame->height);
+        Utility::error_assert((error >= 0), "Failed to allocate an AVFrame", error);
     }
 
+    // Create some counting semaphores for synchonization
     Utility::Semaphore spots_filled{0};
     Utility::Semaphore spots_empty{buffer_size};
 
-    std::thread decoder_thread{decoder_thread_function,
-                               std::ref(decoder),
-                               std::ref(decoded_frames),
-                               std::ref(spots_filled),
-                               std::ref(spots_empty)};
+    // create a new thread to decode the frames
+    std::thread decoder_thread{decoder_thread_function,  // function for thread to call
+                               std::ref(decoder),        // Decoder to use
+                               std::ref(decoded_frames), // Frame_Array to store decoded frames
+                               std::ref(spots_filled),   // Semaphore holding total spots filled
+                               std::ref(spots_empty)};   // Semaphore holding total spots empty / not filled
     
+    // Wait for the decoder thread to fill the buffer / Frame_Array
     while(spots_filled.count() != buffer_size)
     {
     }
 
-    render_frame(texture, renderer, frame);
-
+    // render the first frame
+    error = render_yuv_frame(texture, &display_rect, renderer, decoded_frame);
+    Utility::error_assert((error >= 0), "Failed to render initial YUV frame");
+    
     int frames{0};
     int current_index{0};
+//    double wait_time{0.0}; // time spend waiting / paused
+
     auto start_time{std::chrono::steady_clock::now()};
     auto last_frame_time{start_time};
 
@@ -188,7 +212,8 @@ int main(int argc, char **argv)
         }
 
 
-        render_frame(texture, renderer, decoded_frames[current_index]);
+        error = render_yuv_frame(texture, &display_rect, renderer, decoded_frames[current_index]);
+        Utility::error_assert((error >= 0), "Failed to render YUV frame");
 
         spots_empty.post();
 
@@ -216,106 +241,31 @@ int main(int argc, char **argv)
     return 0;
 }
 
-inline void print_error(int error_number)
-{
-    if(error_number == -1111)
-    {
-        std::cerr << "Failed to allocate one of the following: AVFrame, AVPacket, AVFormatContext, AVCodecContext, or failed to open AVCodecContext, or failed to get AVCodec" << std::endl;
-        std::exit(1);
-    }
-
-    else if(error_number < 0)
-    {
-        std::string message{};
-        int error{0};
-
-        char buff[256];
-        error = av_strerror(error_number, buff, sizeof(buff));
-
-        // failed to find error value
-        if(error < 0)
-        {
-            message = "Unkown Error Code";
-        }
-
-        else
-        {
-            message = buff;
-        }
-
-        std::cerr << "ERROR: " << message << std::endl;
-        std::exit(1);
-    }
-}
-
-SDL_Rect get_native_resolution()
-{
-    SDL_Rect rect;
-    rect.w = -1;
-    rect.h = -1;
-
-    SDL::Window window{};
-    window = SDL_CreateWindow("TEMP WINDOW", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 0, 0, SDL_WINDOW_HIDDEN);
-
-    if(!window)
-    {
-        return rect;
-    }
-
-    int display_index{0};
-
-    display_index = SDL_GetWindowDisplayIndex(window);
-    if(display_index < 0)
-    {
-        return rect;
-    }
-
-    display_index = SDL_GetDisplayUsableBounds(display_index, &rect);
-    if(display_index < 0)
-    {
-        return rect;
-    }
-
-    return rect;
-}
-
-void initialize_sdl_window(SDL::Window &window, SDL::Renderer &renderer)
-{
-    SDL_Rect display_resolution{get_native_resolution()};
-    if(display_resolution.w == -1)
-    {
-        std::cerr << "Failed to get display resolution: " << SDL_GetError() << std::endl;
-        std::exit(1);
-    }
-
-    std::cout << "Native width: " << display_resolution.w << std::endl;
-    std::cout << "Native height: " << display_resolution.h << std::endl;
-
-    window = SDL_CreateWindow("FFmpeg Threading Test",
-                              SDL_WINDOWPOS_CENTERED,
-                              SDL_WINDOWPOS_CENTERED,
-                              display_resolution.w,
-                              display_resolution.h,
-                              SDL_WINDOW_RESIZABLE);
-
-    if(!window)
-    {
-        std::cerr << "Failed to create SDL_Window: " << SDL_GetError() << std::endl;
-        std::exit(1);
-    }
-
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if(!renderer)
-    {
-        std::cerr << "Failed to create SDL_Renderer: " << SDL_GetError() << std::endl;
-    }
-
-}
-
-void render_frame(SDL::Texture &texture, SDL::Renderer &renderer, AVFrame *frame)
+int initialize_decoder(FFmpeg::Decoder &decoder, const std::string &filename, enum AVMediaType media_type, int thread_count)
 {
     int error{0};
 
+    error = decoder.init_format_context(filename, nullptr);
+    if(error < 0)
+    {
+        return error;
+    }
+
+    error = decoder.find_stream(media_type);
+    if(error < 0)
+    {
+        return error;
+    }
+
+    error = decoder.init_codec_context(nullptr, thread_count);
+    return error;
+}
+
+int render_yuv_frame(SDL::Texture &texture, SDL_Rect *dst_rect, SDL::Renderer &renderer, AVFrame *frame)
+{
+    int error{0};
+
+    // update the texture with the provided frame
     error = SDL_UpdateYUVTexture(texture,
                                  nullptr,
                                  frame->data[0],
@@ -327,41 +277,26 @@ void render_frame(SDL::Texture &texture, SDL::Renderer &renderer, AVFrame *frame
 
     if(error < 0)
     {
-        std::cerr << "Failed to update texture: " << SDL_GetError() << std::endl;
-        std::exit(1);
+        return error;
     }
 
+    // clear the screen
     error = SDL_RenderClear(renderer);
     if(error < 0)
     {
-        std::cerr << "Failed to clear renderer: " << SDL_GetError() << std::endl;
-        std::exit(1);
+        return error;
     }
 
-    /*
-    int width, height;
-    error = SDL_QueryTexture(texture, nullptr, nullptr, &width, &height);
+    // copy the data into the renderer
+    error = SDL_RenderCopy(renderer, texture, nullptr, dst_rect);
     if(error < 0)
     {
-        std::cerr << "Failed to get texture attributes: " << SDL_GetError() << std::endl;
-        std::exit(1);
+        return error;
     }
 
-    SDL_Rect rect;
-    rect.x = (1920 - width) / 2;
-    rect.y = (1080 - height) / 2;
-    rect.w = width;
-    rect.h = height;
-    */
-
-    error = SDL_RenderCopy(renderer, texture, nullptr, nullptr);
-    if(error < 0)
-    {
-        std::cerr << "Failed to copy data from texture to renderer: " << SDL_GetError() << std::endl;
-        std::exit(1);
-    }
+    // present the image
     SDL_RenderPresent(renderer);
-
+    return error;
 }
 
 void decoder_thread_function(FFmpeg::Decoder &decoder,
@@ -384,10 +319,7 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
             end_of_file_reached = true;
         }
 
-        else if(error != AVERROR(EAGAIN))
-        {
-            print_error(error);
-        }
+        Utility::error_assert((error == AVERROR(EAGAIN) || error == AVERROR_EOF || error >= 0), "Failed to send packet to decoder", error);
 
         error = decoder.receive_frame(&frame);
         if(error == AVERROR(EAGAIN) && end_of_file_reached)
@@ -401,12 +333,13 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
         {
             continue;
         }
-        print_error(error);
+
+        Utility::error_assert((error >= 0), "Failed to receive frame from decoder", error);
 
         spots_empty.wait();
 
         error = decoded_frames[current_index].copy(frame);
-        print_error(error);
+        Utility::error_assert((error >= 0), "Failed to copy frame", error);
 
         spots_filled.post();
 
