@@ -3,6 +3,7 @@
 extern "C"
 {
 #include <SDL2/SDL.h>
+#include <libavutil/pixfmt.h>
 }
 
 #include <string>
@@ -23,4 +24,8 @@ namespace Utility
     // Note: This function will exit the program via std::exit
     void error_assert(bool, const std::string&);
     void error_assert(bool, const std::string&, int);
+
+    bool rescaling_needed(enum AVPixelFormat, enum AVPixelFormat&, uint32_t&);
+
+    bool valid_rescaling_input(enum AVPixelFormat);
 }

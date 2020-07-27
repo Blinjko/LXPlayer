@@ -28,14 +28,22 @@
 
 #include <ffmpeg/decoder.h>
 #include <ffmpeg/frame.h>
+#include <ffmpeg/scale.h>
 #include <sdl/sdl.h>
 #include <utility/semaphore.h>
 #include <utility/utility.h>
 
+extern "C"
+{
+#include <libavutil/pixfmt.h>
+#include <libswscale/swscale.h>
+}
 int initialize_decoder(FFmpeg::Decoder&, const std::string&, enum AVMediaType, int);
 
 int render_yuv_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
-void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
+int render_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
+
+void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Scale&, bool, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
 
 void sig_interrupt_handler(int signal)
 {
@@ -94,6 +102,36 @@ int main(int argc, char **argv)
 
     // Decoder Setup End //
 
+
+    // Get Pixel Format information //
+
+    // pixel format variables
+    enum AVPixelFormat FFMPEG_INPUT_FORMAT{static_cast<enum AVPixelFormat>(decoded_frame->format)};
+    enum AVPixelFormat FFMPEG_OUTPUT_FORMAT;
+    uint32_t SDL_TEXTURE_FORMAT;
+    bool YUV_IMAGE_OUTPUT;
+
+    bool RESCALING_NEEDED { Utility::rescaling_needed(FFMPEG_INPUT_FORMAT, FFMPEG_OUTPUT_FORMAT, SDL_TEXTURE_FORMAT) };
+
+    // if rescaling is needed, but the FFMPEG_INPUT_FORMAT is not supported then the video cannot be played
+    if(RESCALING_NEEDED && !Utility::valid_rescaling_input(FFMPEG_INPUT_FORMAT))
+    {
+        std::cerr << "Cannot play video unsupported pixel format" << std::endl;
+        return 1;
+    }
+
+    // check for yuv image output
+    if(FFMPEG_OUTPUT_FORMAT == AV_PIX_FMT_YUV420P ||
+       FFMPEG_OUTPUT_FORMAT == AV_PIX_FMT_NV12 ||
+       FFMPEG_OUTPUT_FORMAT == AV_PIX_FMT_NV21)
+    {
+        YUV_IMAGE_OUTPUT = true;
+    }
+
+    // Instantiate a Scale class
+    FFmpeg::Scale rescaler{};
+
+
     // SDL Setup Start //
 
     SDL::Initializer sdl_initializer{SDL_INIT_VIDEO};
@@ -102,7 +140,7 @@ int main(int argc, char **argv)
     std::string window_title{"LXPlayer: "};
     SDL::Renderer renderer{};
     SDL::Texture texture{};
-    SDL_Rect display_rect;
+    //SDL_Rect display_rect;
 
     const SDL_Rect screen_resolution{Utility::get_native_resolution()};
     Utility::error_assert((screen_resolution.w > 0), "Failed to get native screen resolution");
@@ -125,20 +163,38 @@ int main(int argc, char **argv)
 
     // create a texture
     texture = SDL_CreateTexture(renderer,                 // Renderer to use
-                                SDL_PIXELFORMAT_YV12,     // Pixel format
+                                SDL_TEXTURE_FORMAT,       // Pixel format
                                 SDL_TEXTUREACCESS_STATIC, // Texture access
                                 decoded_frame->width,     // Texture width
                                 decoded_frame->height);   // Texture height
     Utility::error_assert(texture, "Failed to create texture");
 
+    /*
     // set the display rectangle
     display_rect.x = (screen_resolution.w - decoded_frame->width) / 2;
     display_rect.y = (screen_resolution.h - decoded_frame->height) / 2;
     display_rect.w = decoded_frame->width;
     display_rect.h = decoded_frame->height;
+    */
 
     // SDL Setup End //
 
+    // Setup image rescaler if needed //
+    if(RESCALING_NEEDED)
+    {
+        rescaler = sws_getContext(decoded_frame->width,   // source width
+                                  decoded_frame->height,  // source height
+                                  FFMPEG_INPUT_FORMAT,    // source pixel format
+                                  decoded_frame->width,   // destination width
+                                  decoded_frame->height,  // destination height
+                                  FFMPEG_OUTPUT_FORMAT,   // destination pixel format
+                                  0,                      // flags
+                                  nullptr,                // src filter
+                                  nullptr,                // dst filter
+                                  nullptr);                
+
+        Utility::error_assert(rescaler.swscontext(), "Failed to get rescaling context", -1111);
+    }
 
     // Get the timebase, framerate and set a buffer size
     const AVStream *stream{decoder.format_context()->streams[decoder.stream_number()]};
@@ -154,7 +210,7 @@ int main(int argc, char **argv)
     // The frames are allocated once and deallocated once
     for(int i{0}; i != decoded_frames.size(); ++i)
     {
-        error = decoded_frames[i].allocate(static_cast<enum AVPixelFormat>(decoded_frame->format),
+        error = decoded_frames[i].allocate(FFMPEG_OUTPUT_FORMAT,
                                            decoded_frame->width,
                                            decoded_frame->height);
         Utility::error_assert((error >= 0), "Failed to allocate an AVFrame", error);
@@ -167,19 +223,58 @@ int main(int argc, char **argv)
     // create a new thread to decode the frames
     std::thread decoder_thread{decoder_thread_function,  // function for thread to call
                                std::ref(decoder),        // Decoder to use
+                               std::ref(rescaler),       // The image rescaler to use
+                               RESCALING_NEEDED,         // a boolean indicating to rescale the image
                                std::ref(decoded_frames), // Frame_Array to store decoded frames
                                std::ref(spots_filled),   // Semaphore holding total spots filled
                                std::ref(spots_empty)};   // Semaphore holding total spots empty / not filled
     
+
+    // Inital Frame Setup //
+    FFmpeg::Frame initial_frame{};
+    error = initial_frame.allocate(FFMPEG_OUTPUT_FORMAT, 
+                                   decoded_frame->width,
+                                   decoded_frame->height);
+
+    Utility::error_assert((error >= 0), "Failed to allocate initial frame", error);
+
+    // rescale the first image if needed
+    if(RESCALING_NEEDED)
+    {
+        error = sws_scale(rescaler,                       // Rescaling context to use
+                decoded_frame->data,                      // Source data
+                decoded_frame->linesize,                  // Source linesize
+                0,                                        // Y position in source image
+                decoded_frame->height,                            // height of the source image
+                initial_frame->data,                      // destination data
+                initial_frame->linesize);                 // destination linesize
+
+        Utility::error_assert((error >= 0), "Failed to rescale initial image", error);
+    }
+
+    else
+    {
+        initial_frame.copy(decoded_frame);
+    }
+
     // Wait for the decoder thread to fill the buffer / Frame_Array
     while(spots_filled.count() != buffer_size)
     {
     }
 
-    // render the first frame
-    error = render_yuv_frame(texture, &display_rect, renderer, decoded_frame);
-    Utility::error_assert((error >= 0), "Failed to render initial YUV frame");
-    
+    // render the first image
+    if(YUV_IMAGE_OUTPUT)
+    {
+        error = render_yuv_frame(texture, nullptr, renderer, initial_frame);
+        Utility::error_assert((error >= 0), "Failed to render initial YUV frame");
+    }
+
+    else
+    {
+        error = render_frame(texture, nullptr, renderer, initial_frame);
+        Utility::error_assert((error >= 0), "Failed to render initial frame");
+    }
+
     int frames{0};
     int current_index{0};
 //    double wait_time{0.0}; // time spend waiting / paused
@@ -211,9 +306,16 @@ int main(int argc, char **argv)
             difference = current_time - start_time;
         }
 
-
-        error = render_yuv_frame(texture, &display_rect, renderer, decoded_frames[current_index]);
-        Utility::error_assert((error >= 0), "Failed to render YUV frame");
+        if(YUV_IMAGE_OUTPUT)
+        {
+            error = render_yuv_frame(texture, nullptr, renderer, decoded_frames[current_index]);
+            Utility::error_assert((error >= 0), "Failed to render YUV frame");
+        }
+        else 
+        {
+            error = render_frame(texture, nullptr, renderer, decoded_frames[current_index]);
+            Utility::error_assert((error >= 0), "Failed to render frame");
+        }
 
         spots_empty.post();
 
@@ -299,7 +401,44 @@ int render_yuv_frame(SDL::Texture &texture, SDL_Rect *dst_rect, SDL::Renderer &r
     return error;
 }
 
+int render_frame(SDL::Texture &texture, SDL_Rect *dst_rect, SDL::Renderer &renderer, AVFrame *frame)
+{
+    int error{0};
+
+    // update the texture with the provided frame
+    error = SDL_UpdateTexture(texture,
+                              nullptr,
+                              frame->data[0],
+                              frame->linesize[0]);
+
+
+    if(error < 0)
+    {
+        return error;
+    }
+
+    // clear the screen
+    error = SDL_RenderClear(renderer);
+    if(error < 0)
+    {
+        return error;
+    }
+
+    // copy the data into the renderer
+    error = SDL_RenderCopy(renderer, texture, nullptr, dst_rect);
+    if(error < 0)
+    {
+        return error;
+    }
+
+    // present the image
+    SDL_RenderPresent(renderer);
+    return error;
+}
+
 void decoder_thread_function(FFmpeg::Decoder &decoder,
+                             FFmpeg::Scale &rescaler,
+                             bool RESCALING_NEEDED,
                              FFmpeg::Frame_Array &decoded_frames,
                              Utility::Semaphore &spots_filled,
                              Utility::Semaphore &spots_empty)
@@ -338,8 +477,25 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
 
         spots_empty.wait();
 
-        error = decoded_frames[current_index].copy(frame);
-        Utility::error_assert((error >= 0), "Failed to copy frame", error);
+        if(RESCALING_NEEDED)
+        {
+            error = sws_scale(rescaler,                                 // Rescaling context to use
+                              frame->data,                              // Source data
+                              frame->linesize,                          // Source linesize
+                              0,                                        // Y position in source image
+                              frame->height,                            // height of the source image
+                              decoded_frames[current_index]->data,      // destination data
+                              decoded_frames[current_index]->linesize); // destination linesize
+
+            Utility::error_assert((error >= 0), "Failed to rescale image", error);
+
+        }
+
+        else
+        {
+            error = decoded_frames[current_index].copy(frame);
+            Utility::error_assert((error >= 0), "Failed to copy frame", error);
+        }
 
         spots_filled.post();
 
