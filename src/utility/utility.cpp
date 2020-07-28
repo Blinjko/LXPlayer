@@ -6,6 +6,7 @@ extern "C"
 #include <SDL2/SDL.h>
 #include <libavutil/error.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 }
 
@@ -239,6 +240,80 @@ namespace Utility
         else
         {
             return false;
+        }
+    }
+
+
+    // function that dictates wheather audio resampling is needed
+    // If conversion is needed, output_format will be set to the appropriate AVSampleFormat, otherise it will be the same as input_format
+    // portaudio_format will always be set to the output format for portaudio to use
+    bool resampling_needed(enum AVSampleFormat input_format, enum AVSampleFormat &output_format, PaSampleFormat &portaudio_format)
+    {
+        switch(input_format)
+        {
+            case AV_SAMPLE_FMT_U8:
+                portaudio_format = paUInt8;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_S16:
+                portaudio_format = paInt16;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_S32:
+                portaudio_format = paInt32;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_FLT:
+                portaudio_format = paFloat32;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_DBL:
+                portaudio_format = paFloat32;
+                output_format = AV_SAMPLE_FMT_FLT;
+                return true;
+
+            case AV_SAMPLE_FMT_U8P:
+                portaudio_format = paUInt8 | paNonInterleaved;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_S16P:
+                portaudio_format = paInt16 | paNonInterleaved;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_S32P:
+                portaudio_format = paInt32 | paNonInterleaved;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_FLTP:
+                portaudio_format = paFloat32 | paNonInterleaved;
+                output_format = input_format;
+                return false;
+
+            case AV_SAMPLE_FMT_DBLP:
+                portaudio_format = paFloat32 | paNonInterleaved;
+                output_format = AV_SAMPLE_FMT_FLTP;
+                return true;
+
+            case AV_SAMPLE_FMT_S64:
+                portaudio_format = paInt32;
+                output_format = AV_SAMPLE_FMT_S32;
+                return true;
+
+            case AV_SAMPLE_FMT_S64P:
+                portaudio_format = paInt32 | paNonInterleaved;
+                output_format = AV_SAMPLE_FMT_S32P;
+                return true;
+
+            default:
+                std::cerr << "Unkonw FFmpeg sample format, cannot convert" << std::endl;
+                return true;
         }
     }
 }

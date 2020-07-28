@@ -4,6 +4,7 @@ extern "C"
 {
 #include <SDL2/SDL.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/samplefmt.h>
 #include <portaudio.h>
 }
 
@@ -33,6 +34,8 @@ namespace Utility
     void portaudio_error_assert(bool, const std::string&, PaError);
 
     bool rescaling_needed(enum AVPixelFormat, enum AVPixelFormat&, uint32_t&);
-
     bool valid_rescaling_input(enum AVPixelFormat);
+
+    // function to dictate weather resampling is needed
+    bool resampling_needed(enum AVSampleFormat, enum AVSampleFormat&, PaSampleFormat&);
 }

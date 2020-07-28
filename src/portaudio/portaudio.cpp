@@ -277,7 +277,7 @@ namespace PortAudio
      * Description: gets the actual latency of the stream
      * Return: a postive value on success, negative one on failure
      */
-    PaTime Stream_Playback::acutal_latency()
+    PaTime Stream_Playback::actual_latency()
     {
         const PaStreamInfo *stream_info{Pa_GetStreamInfo(m_stream)};
 

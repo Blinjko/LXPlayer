@@ -21,6 +21,7 @@ namespace FFmpeg
 
             operator AVFrame*();
             AVFrame *operator->();
+            AVFrame *operator=(AVFrame*);
 
 
             int allocate(enum AVPixelFormat, int, int);

@@ -34,7 +34,7 @@ namespace PortAudio
             PaError write(const void*, unsigned long);
             PaError reset();
 
-            PaTime acutal_latency();
+            PaTime actual_latency();
 
             bool steam_stopped() const;
             int channel_count() const;

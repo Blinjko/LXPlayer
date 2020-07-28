@@ -23,6 +23,10 @@ LIBS = -lavformat -lavcodec -lavutil -lswscale -lswresample -lSDL2 -lportaudio -
 LXPlayer: $(TOTAL_OBJECTS)
 	$(CXX) $(TOTAL_OBJECTS) $(LIBS) -o LXPlayer
 
+# sdl.o is just needed for utility.o, SDL is not actually used anywhere in AudioPlayer
+AudioPlayer: $(PLAYER_SRC_DIR)audio-player.cpp decoder.o frame.o portaudio.o resample.o utility.o sdl.o
+	$(CXX) $(CXXFLAGS) $(PLAYER_SRC_DIR)audio-player.cpp decoder.o frame.o portaudio.o resample.o utility.o sdl.o -o AudioPlayer $(LIBS)
+
 decoder.o: $(FFMPEG_INCLUDE_DIR)decoder.h $(FFMPEG_SRC_DIR)decoder.cpp
 	$(CXX) $(CXXFLAGS) -c $(FFMPEG_SRC_DIR)decoder.cpp 
 

@@ -29,6 +29,9 @@ namespace FFmpeg
     // overloaded -> operator
     AVFrame *Frame::operator->() { return m_frame; }
 
+    // overloaded = operator
+    AVFrame *Frame::operator=(AVFrame *frame) { return m_frame = frame; }
+
     // allocate function
     // Description: Allocates an avframe to hold an image with the given parameters
     // Parameter: pixel_format - the AVPixelFormat of the image to allocate
