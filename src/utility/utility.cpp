@@ -81,6 +81,25 @@ namespace Utility
 
     }
 
+    // prints the provided std::string message and the error message for the given PaError code
+    void portaudio_print_error(const std::string &message, PaError error_code)
+    {
+        std::string error_message{};
+
+        if(error_code == paUnanticipatedHostError)
+        {
+            const PaHostErrorInfo *error_info{Pa_GetLastHostErrorInfo()};
+            error_message.append(error_info->errorText);
+        }
+        else
+        {
+            error_message.append(Pa_GetErrorText(error_code));
+        }
+
+        std::cerr << "Programmer message: " << message << std::endl;
+        std::cerr << "PortAudio error message: " << error_message << std::endl;
+    }
+
     // Assert functions, if indicator is false then call the apropriate print error function, then exit the program
     void error_assert(bool indicator, const std::string &message)
     {
@@ -96,6 +115,15 @@ namespace Utility
         if(!indicator)
         {
             print_error(message, error_code);
+            std::exit(1);
+        }
+    }
+
+    void portaudio_error_assert(bool indicator, const std::string &message, PaError error_code)
+    {
+        if(!indicator)
+        {
+            portaudio_print_error(message, error_code);
             std::exit(1);
         }
     }
