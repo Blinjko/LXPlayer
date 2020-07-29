@@ -8,6 +8,14 @@
 #include <string>
 #include <csignal>
 #include <cstdlib>
+#include <atomic>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <random>
+#include <vector>
+#include <algorithm>
+#include <ctime>
 
 void interrupt_signal(int signal)
 {
@@ -23,19 +31,52 @@ void terminate_signal(int signal)
     std::exit(1);
 }
 
+void listen_thread_func(std::atomic<bool>*, std::atomic<bool>*, std::size_t*, std::condition_variable*);
+
+void shuffle_vector(std::vector<std::string>&);
+
 int main(int argc, char **argv)
 {
     if(argc < 2)
     {
         std::cerr << "Invalid Usage" << std::endl;
-        std::cout << "Valid Usage: " << argv[0] << " <files1> <file2> <file3> ..." << std::endl;
+        std::cerr << "Valid Usage: " << argv[0] << " <shuffle> <files1> <file2> <file3> ..." << std::endl;
+        std::cerr << "To shuffle: --shuffle" << std::endl;;
         return 1;
+    }
+
+    std::vector<std::string> files;
+
+    bool shuffling{false};
+
+    for(int i{1}; i != argc; ++i)
+    {
+        std::string current_file{argv[i]};
+
+        if(current_file == "--shuffle")
+        {
+            shuffling = true;
+        }
+
+        else
+        {
+            files.push_back(current_file);
+        }
+    }
+
+    if(shuffling)
+    {
+        files.shrink_to_fit();
+        shuffle_vector(files);
     }
 
     std::signal(SIGINT, interrupt_signal);
     std::signal(SIGTERM, terminate_signal);
 
-    for(int i{1}; i != argc; ++i)
+    // initialize portaudio
+    PortAudio::Initializer portaudio_init{};
+
+    for(std::size_t i{0}; i != files.size(); ++i)
     {
         FFmpeg::Decoder decoder{};
         FFmpeg::Resample resampler{};
@@ -43,7 +84,7 @@ int main(int argc, char **argv)
         int error{0};
 
         // open the file
-        error = decoder.init_format_context(std::string{argv[i]}, nullptr);
+        error = decoder.init_format_context(files.at(i), nullptr);
         Utility::error_assert((error >= 0), "Failed to open file", error);
 
         // find a stream
@@ -74,8 +115,6 @@ int main(int argc, char **argv)
         Utility::error_assert((error >= 0), "Failed to receive frame from decoder", error);
 
         error = 0;
-        // initialize portaudio
-        PortAudio::Initializer portaudio_init{};
 
         PortAudio::Stream_Playback playback{};
 
@@ -135,15 +174,53 @@ int main(int argc, char **argv)
             Utility::error_assert((error >= 0), "Failed to initialize resampler", error);
         }
 
+        std::atomic<bool> paused{false};
+        std::atomic<bool> skipping{false};
+        std::condition_variable cv{};
+        std::mutex mutex{};
+
         // start the stream
         error = playback.start_stream();
         Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
 
-
         std::cout << "Latency: " << playback.actual_latency() << std::endl;
+
+        // create the listening thread
+        std::thread listen_thread{listen_thread_func,
+                                  &paused,
+                                  &skipping,
+                                  &i,
+                                  &cv};
+        listen_thread.detach();
+
         // main loop
         while(error != AVERROR(EAGAIN) || !end_of_file_reached)
         {
+            if(std::atomic_load<bool>(&paused))
+            {
+                // stop the playback stream
+                error = playback.stop_stream();
+                Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
+
+                if(std::atomic_load<bool>(&skipping))
+                {
+                    break;
+                }
+
+                std::unique_lock<std::mutex> lock{mutex};
+                cv.wait(lock);
+                lock.unlock();
+
+                if(std::atomic_load<bool>(&skipping))
+                {
+                    break;
+                }
+
+                // start the stream
+                error = playback.start_stream();
+                Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
+            }
+
             if(RESAMPLING_NEEDED)
             {
                 // set needed values
@@ -184,6 +261,100 @@ int main(int argc, char **argv)
             error = decoder.receive_frame(&decoded_frame);
             Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to receive packet from decoder", error);
         }
+
     }
     return 0;
+}
+
+void listen_thread_func(std::atomic<bool> *paused,    // boolean indicating if playback is paused
+                        std::atomic<bool> *skipping,  // boolean indicating if skipping to next track or previous track
+                        std::size_t *loop_index,      // current track / loop index
+                        std::condition_variable *cv)  // condition variable to wake up playback thread
+{
+    std::cout << "Commands: " << std::endl;
+    std::cout << "exit" << std::endl;
+    std::cout << "pause" << std::endl;
+    std::cout << "play" << std::endl;
+    std::cout << "next" << std::endl;
+    std::cout << "prev" << std::endl;
+
+    std::string command{};
+    while(1)
+    {
+        command = "";
+
+        std::cout << "Enter a command: ";
+        std::getline(std::cin, command);
+
+        if(command == "exit")
+        {
+            std::exit(1);
+        }
+
+        else if(command == "pause" && !std::atomic_load<bool>(paused))
+        {
+            std::atomic_store<bool>(paused, true);
+            std::cout << "Playback Paused" << std::endl;
+        }
+
+        else if(command == "play" && std::atomic_load<bool>(paused))
+        {
+            std::atomic_store<bool>(paused, false);
+            cv->notify_one();
+            std::cout << "Playback Resumed" << std::endl;
+        }
+
+        else if(command == "next")
+        {
+            if(std::atomic_load<bool>(paused))
+            {
+                std::atomic_store<bool>(skipping, true);
+                cv->notify_one();
+            }
+
+            else
+            {
+                std::atomic_store<bool>(skipping, true);
+                std::atomic_store<bool>(paused, true);
+            }
+        }
+
+        else if(command == "prev")
+        {
+            if((*loop_index) == 0)
+            {
+                std::cout << "Already at first track" << std::endl;
+            }
+
+            else
+            {
+
+                (*loop_index) -= 2;
+                if(std::atomic_load<bool>(paused))
+                {
+                    std::atomic_store<bool>(skipping, true);
+                    cv->notify_one();
+                }
+
+                else
+                {
+                    std::atomic_store<bool>(skipping, true);
+                    std::atomic_store<bool>(paused, true);
+                }
+            }
+
+        }
+
+        else
+        {
+            std::cout << "Unkown command" << std::endl;
+        }
+    }
+}
+
+void shuffle_vector(std::vector<std::string> &files)
+{
+    static std::mt19937 mt{static_cast<std::size_t>(std::time(nullptr))};
+
+    std::shuffle(files.begin(), files.end(), mt);
 }
