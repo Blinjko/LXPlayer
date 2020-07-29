@@ -76,6 +76,14 @@ int main(int argc, char **argv)
     // initialize portaudio
     PortAudio::Initializer portaudio_init{};
 
+    // print command information
+    std::cout << "Commands: " << std::endl;
+    std::cout << "exit" << std::endl;
+    std::cout << "pause" << std::endl;
+    std::cout << "play" << std::endl;
+    std::cout << "next" << std::endl;
+    std::cout << "prev" << std::endl;
+
     for(std::size_t i{0}; i != files.size(); ++i)
     {
         FFmpeg::Decoder decoder{};
@@ -179,12 +187,6 @@ int main(int argc, char **argv)
         std::condition_variable cv{};
         std::mutex mutex{};
 
-        // start the stream
-        error = playback.start_stream();
-        Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
-
-        std::cout << "Latency: " << playback.actual_latency() << std::endl;
-
         // create the listening thread
         std::thread listen_thread{listen_thread_func,
                                   &paused,
@@ -192,6 +194,15 @@ int main(int argc, char **argv)
                                   &i,
                                   &cv};
         listen_thread.detach();
+
+        std::cout << "Now Playing: " << files.at(i) << std::endl;
+
+        // start the stream
+        error = playback.start_stream();
+        Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
+
+        std::cout << "Latency: " << playback.actual_latency() << std::endl;
+
 
         // main loop
         while(error != AVERROR(EAGAIN) || !end_of_file_reached)
@@ -234,7 +245,7 @@ int main(int argc, char **argv)
 
                 // play audio
                 error = playback.write(resampled_frame->extended_data[0], resampled_frame->nb_samples);
-                Utility::portaudio_error_assert((error >= 0), "Failed to play resampled frame", error);
+                Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play resampled frame", error); // -9980 == underrun
 
                 av_frame_unref(resampled_frame);
             }
@@ -243,7 +254,7 @@ int main(int argc, char **argv)
             {
                 // play audio
                 error = playback.write(decoded_frame->extended_data, decoded_frame->nb_samples);
-                Utility::portaudio_error_assert((error >= 0), "Failed to play frame", error);
+                Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play frame", error); // -9980 == underrun
             }
 
             error = 0;
@@ -271,19 +282,11 @@ void listen_thread_func(std::atomic<bool> *paused,    // boolean indicating if p
                         std::size_t *loop_index,      // current track / loop index
                         std::condition_variable *cv)  // condition variable to wake up playback thread
 {
-    std::cout << "Commands: " << std::endl;
-    std::cout << "exit" << std::endl;
-    std::cout << "pause" << std::endl;
-    std::cout << "play" << std::endl;
-    std::cout << "next" << std::endl;
-    std::cout << "prev" << std::endl;
 
     std::string command{};
     while(1)
     {
         command = "";
-
-        std::cout << "Enter a command: ";
         std::getline(std::cin, command);
 
         if(command == "exit")
