@@ -202,11 +202,6 @@ namespace Utility
             case AV_PIX_FMT_YUV440P10LE:
             case AV_PIX_FMT_YUV440P10BE:
             case AV_PIX_FMT_YUV440P12LE:
-            case AV_PIX_FMT_YUVA422P12BE:
-            case AV_PIX_FMT_YUVA422P12LE:
-            case AV_PIX_FMT_YUVA444P12BE:
-            case AV_PIX_FMT_YUVA444P12LE:
-            case AV_PIX_FMT_Y210LE:
                 sdl_format = SDL_PIXELFORMAT_YV12;
                 ffmpeg_output_format = AV_PIX_FMT_YUV420P;
                 return true;
