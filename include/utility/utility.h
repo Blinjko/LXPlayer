@@ -37,5 +37,5 @@ namespace Utility
     bool valid_rescaling_input(enum AVPixelFormat);
 
     // function to dictate weather resampling is needed
-    bool resampling_needed(enum AVSampleFormat, enum AVSampleFormat&, PaSampleFormat&);
+    bool resampling_needed(enum AVSampleFormat, enum AVSampleFormat&, PaSampleFormat&, bool&);
 }

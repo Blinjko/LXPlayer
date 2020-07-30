@@ -137,8 +137,10 @@ int main(int argc, char **argv)
         enum AVSampleFormat FFMPEG_INPUT_FORMAT{static_cast<enum AVSampleFormat>(decoded_frame->format)};
         enum AVSampleFormat FFMPEG_OUTPUT_FORMAT;
         PaSampleFormat PORTAUDIO_OUTPUT_FORMAT;
+        bool SAMPLES_INTERLEAVED{false};
+
         // determine if resampling is needed, and get the PORTAUDIO_OUTPUT_FORMAT
-        bool RESAMPLING_NEEDED{ Utility::resampling_needed(FFMPEG_INPUT_FORMAT, FFMPEG_OUTPUT_FORMAT, PORTAUDIO_OUTPUT_FORMAT) };
+        bool RESAMPLING_NEEDED{ Utility::resampling_needed(FFMPEG_INPUT_FORMAT, FFMPEG_OUTPUT_FORMAT, PORTAUDIO_OUTPUT_FORMAT, SAMPLES_INTERLEAVED) };
 
         // open a playback stream
         error = playback.open_stream(decoded_frame->channels,   // number of output channels
@@ -239,12 +241,25 @@ int main(int argc, char **argv)
                 resampled_frame->sample_rate = SAMPLE_RATE;
                 resampled_frame->format = static_cast<int>(FFMPEG_OUTPUT_FORMAT);
 
+                // a odd thing seems to happen with .wav files where the channel layout is 0
+                // so we have to calculate and set it otherwise we get errors when resampling
+                decoded_frame->channel_layout = CHANNEL_LAYOUT;
+
                 // resample frame
                 error = swr_convert_frame(resampler, resampled_frame, decoded_frame);
                 Utility::error_assert((error >= 0), "Failed to resample frame", error);
 
                 // play audio
-                error = playback.write(resampled_frame->extended_data[0], resampled_frame->nb_samples);
+                if(SAMPLES_INTERLEAVED)
+                {
+                    error = playback.write(resampled_frame->extended_data[0], resampled_frame->nb_samples);
+                }
+
+                else
+                {
+                    error = playback.write(resampled_frame->extended_data, resampled_frame->nb_samples);
+                }
+
                 Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play resampled frame", error); // -9980 == underrun
 
                 av_frame_unref(resampled_frame);
@@ -253,7 +268,16 @@ int main(int argc, char **argv)
             else
             {
                 // play audio
-                error = playback.write(decoded_frame->extended_data, decoded_frame->nb_samples);
+                if(SAMPLES_INTERLEAVED) 
+                { 
+                    error = playback.write(decoded_frame->extended_data[0], decoded_frame->nb_samples); 
+                }
+
+                else 
+                { 
+                    error = playback.write(decoded_frame->extended_data, decoded_frame->nb_samples); 
+                }
+
                 Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play frame", error); // -9980 == underrun
             }
 

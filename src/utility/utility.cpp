@@ -242,68 +242,80 @@ namespace Utility
     // function that dictates wheather audio resampling is needed
     // If conversion is needed, output_format will be set to the appropriate AVSampleFormat, otherise it will be the same as input_format
     // portaudio_format will always be set to the output format for portaudio to use
-    bool resampling_needed(enum AVSampleFormat input_format, enum AVSampleFormat &output_format, PaSampleFormat &portaudio_format)
+    bool resampling_needed(enum AVSampleFormat input_format, enum AVSampleFormat &output_format, PaSampleFormat &portaudio_format, bool &interleaved)
     {
         switch(input_format)
         {
             case AV_SAMPLE_FMT_U8:
                 portaudio_format = paUInt8;
                 output_format = input_format;
+                interleaved = true;
                 return false;
 
             case AV_SAMPLE_FMT_S16:
                 portaudio_format = paInt16;
                 output_format = input_format;
+                interleaved = true;
                 return false;
 
             case AV_SAMPLE_FMT_S32:
                 portaudio_format = paInt32;
                 output_format = input_format;
+                interleaved = true;
                 return false;
 
             case AV_SAMPLE_FMT_FLT:
                 portaudio_format = paFloat32;
                 output_format = input_format;
+                interleaved = true;
                 return false;
 
             case AV_SAMPLE_FMT_DBL:
                 portaudio_format = paFloat32;
                 output_format = AV_SAMPLE_FMT_FLT;
+                interleaved = true;
                 return true;
 
             case AV_SAMPLE_FMT_U8P:
                 portaudio_format = paUInt8 | paNonInterleaved;
                 output_format = input_format;
+                interleaved = false;
                 return false;
 
             case AV_SAMPLE_FMT_S16P:
                 portaudio_format = paInt16 | paNonInterleaved;
                 output_format = input_format;
+                interleaved = false;
                 return false;
 
             case AV_SAMPLE_FMT_S32P:
                 portaudio_format = paInt32 | paNonInterleaved;
                 output_format = input_format;
+                interleaved = false;
                 return false;
 
             case AV_SAMPLE_FMT_FLTP:
                 portaudio_format = paFloat32 | paNonInterleaved;
                 output_format = input_format;
+                interleaved = false;
                 return false;
 
             case AV_SAMPLE_FMT_DBLP:
                 portaudio_format = paFloat32 | paNonInterleaved;
                 output_format = AV_SAMPLE_FMT_FLTP;
+                interleaved = false;
                 return true;
 
             case AV_SAMPLE_FMT_S64:
                 portaudio_format = paInt32;
                 output_format = AV_SAMPLE_FMT_S32;
+                interleaved = true;
                 return true;
 
             case AV_SAMPLE_FMT_S64P:
                 portaudio_format = paInt32 | paNonInterleaved;
                 output_format = AV_SAMPLE_FMT_S32P;
+                interleaved = false;
                 return true;
 
             default:
