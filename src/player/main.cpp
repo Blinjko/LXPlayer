@@ -29,6 +29,8 @@
 #include <ffmpeg/decoder.h>
 #include <ffmpeg/frame.h>
 #include <ffmpeg/scale.h>
+#include <ffmpeg/resample.h>
+#include <portaudio/portaudio.h>
 #include <sdl/sdl.h>
 #include <utility/semaphore.h>
 #include <utility/utility.h>
@@ -38,13 +40,30 @@ extern "C"
 #include <libavutil/pixfmt.h>
 #include <libswscale/swscale.h>
 }
-int initialize_decoder(FFmpeg::Decoder&, const std::string&, enum AVMediaType, int);
 
+// Shared_Varaibles struct, holds variables that are shared between threads
+// Holds only data variables, no synchronization variables
+struct Shared_Variables
+{
+    bool audio_playback;
+    bool video_playback;
+
+    bool video_waiting;
+    bool audio_waiting;
+
+    // audio latency in seconds
+    double audio_latency;
+};
+
+// video stuff
 int render_yuv_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
 int render_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
-
 void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Scale&, bool, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
 
+void video_playback(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::mutex&);
+
+
+void audio_thread_func(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::mutex&);
 void sig_interrupt_handler(int signal)
 {
     std::cout << "Interrupted" << std::endl;
@@ -74,23 +93,87 @@ int main(int argc, char **argv)
     // put passed filename into std::string
     std::string filename{argv[1]};
 
-    // Decoder Setup Start //
+    // setup decoder and shared variables
+    FFmpeg::Decoder video_decoder{};
+    FFmpeg::Decoder audio_decoder{};
+    Shared_Variables shared_vars{};
 
-    FFmpeg::Decoder decoder{};
-    int thread_count{1};
-
-    // prompt user for amount of threads to use
-    std::cout << "How many decoding threads would you like: ";
-    std::cin >> thread_count;
+    shared_vars.audio_playback = true;
+    shared_vars.video_playback = true;
 
     int error{0};
-    error = initialize_decoder(decoder, filename, AVMEDIA_TYPE_VIDEO, thread_count);
+
+    // open the file for both decoders
+    error = video_decoder.init_format_context(filename, nullptr);
+    Utility::error_assert((error >= 0), "Failed to open file, video decoder", error);
+
+    error = audio_decoder.init_format_context(filename, nullptr);
+    Utility::error_assert((error >= 0), "Failed to open file, audio decoder", error);
+
+    // try to find video stream
+    error = video_decoder.find_stream(AVMEDIA_TYPE_VIDEO);
+    if(error == AVERROR_STREAM_NOT_FOUND)
+    {
+        shared_vars.video_playback = false;
+        error = 0;
+    }
+    Utility::error_assert((error >= 0), "Failed to find video stream", error);
+
+    // try to find audio stream
+    error = audio_decoder.find_stream(AVMEDIA_TYPE_AUDIO);
+    if(error == AVERROR_STREAM_NOT_FOUND)
+    {
+        shared_vars.audio_playback = false;
+        error = 0;
+    }
+    Utility::error_assert((error >= 0), "Failed to find audio stream", error);
+
+    shared_vars.video_waiting = false;
+    shared_vars.audio_waiting = false;
+
+    std::condition_variable start_cv;
+    std::mutex mutex;
+
+    // start audio thread, will automatically exit if there is no audio playback
+    std::thread audio_thread{audio_thread_func,
+                             std::ref(audio_decoder),
+                             std::ref(shared_vars),
+                             std::ref(start_cv),
+                             std::ref(mutex)};
+
+    // the main thread decodes video, will also automatically return if there is no video playback
+    video_playback(video_decoder, shared_vars, start_cv, mutex);
+
+    audio_thread.join();
+    return 0;
+}
+
+void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::mutex &mutex)
+{
+    // check for video playback
+    if(!shared_vars.video_playback)
+    {
+        return;
+    }
+
+    int error{0};
+
+    int thread_count{4};
+
+    error = decoder.init_codec_context(nullptr, thread_count);
     Utility::error_assert((error >= 0), "Failed to initialize FFmpeg Decoder", error);
 
     // Fill decoder up with data
     while(error != AVERROR(EAGAIN))
     {
         error = decoder.send_packet();
+        if(error == AVERROR_EOF)
+        {
+            shared_vars.video_playback = false;
+            shared_vars.video_waiting = true;
+            return;
+        }
+
         Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to send packet do FFmpeg Decoder", error);
     }
 
@@ -117,7 +200,7 @@ int main(int argc, char **argv)
     if(RESCALING_NEEDED && !Utility::valid_rescaling_input(FFMPEG_INPUT_FORMAT))
     {
         std::cerr << "Cannot play video unsupported pixel format" << std::endl;
-        return 1;
+        return;
     }
 
     // check for yuv image output
@@ -137,7 +220,7 @@ int main(int argc, char **argv)
     SDL::Initializer sdl_initializer{SDL_INIT_VIDEO};
 
     SDL::Window window{};
-    std::string window_title{"LXPlayer: "};
+    std::string window_title{"LXPlayer"};
     SDL::Renderer renderer{};
     SDL::Texture texture{};
     //SDL_Rect display_rect;
@@ -145,7 +228,6 @@ int main(int argc, char **argv)
     const SDL_Rect screen_resolution{Utility::get_native_resolution()};
     Utility::error_assert((screen_resolution.w > 0), "Failed to get native screen resolution");
 
-    window_title.append(filename);
     // create the window
     window = SDL_CreateWindow(window_title.c_str(),   // Window Title
                               SDL_WINDOWPOS_CENTERED, // X Position
@@ -262,6 +344,33 @@ int main(int argc, char **argv)
     {
     }
 
+    // make sure audio thread and video thread, this thread, start at the same time
+    std::unique_lock<std::mutex> lock{mutex};
+
+    if(shared_vars.audio_playback)
+    {
+        if(shared_vars.audio_waiting)
+        {
+            lock.unlock();
+            start_cv.notify_one();
+        }
+
+        else
+        {
+            shared_vars.video_waiting = true;
+            start_cv.wait(lock);
+            shared_vars.video_waiting = false;
+            lock.unlock();
+        }
+    }
+    else
+    {
+        lock.unlock();
+    }
+
+    // sleep for however long the audio latency is, this will negate the latency
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(shared_vars.audio_latency * 1000)));
+
     // render the first image
     if(YUV_IMAGE_OUTPUT)
     {
@@ -334,34 +443,9 @@ int main(int argc, char **argv)
         }
     }
 
-
-    auto end_time{std::chrono::steady_clock::now()};
-    std::chrono::duration<double> diff{end_time - start_time};
-    std::cout << "Total time: " << diff.count() / 60 << std::endl;
-
     decoder_thread.join();
-    return 0;
 }
 
-int initialize_decoder(FFmpeg::Decoder &decoder, const std::string &filename, enum AVMediaType media_type, int thread_count)
-{
-    int error{0};
-
-    error = decoder.init_format_context(filename, nullptr);
-    if(error < 0)
-    {
-        return error;
-    }
-
-    error = decoder.find_stream(media_type);
-    if(error < 0)
-    {
-        return error;
-    }
-
-    error = decoder.init_codec_context(nullptr, thread_count);
-    return error;
-}
 
 int render_yuv_frame(SDL::Texture &texture, SDL_Rect *dst_rect, SDL::Renderer &renderer, AVFrame *frame)
 {
@@ -506,4 +590,205 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
         }
 
     }
+}
+
+
+void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::mutex &mutex)
+{
+    // check if audio is being played back
+    if(!shared_vars.audio_playback)
+    {
+        return;
+    }
+
+    // set audio latency
+    shared_vars.audio_latency = 0.05;
+
+    // initialize portaudio
+    PortAudio::Initializer portadio_init{};
+
+    FFmpeg::Resample resampler{};
+
+    int error{0};
+
+    // start the decoder
+    error = decoder.init_codec_context(nullptr, 1);
+    Utility::error_assert((error >= 0), "Failed to initialize audio decoder codec", error);
+
+    bool end_of_file_reached{false};
+
+    // fill the decoder
+    AVFrame *decoded_frame{nullptr};
+    FFmpeg::Frame resampled_frame{};
+    while(error != AVERROR(EAGAIN))
+    {
+        error = decoder.send_packet();
+        if(error == AVERROR_EOF)
+        {
+            end_of_file_reached = true;
+        }
+
+        Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to send packet to audio decoder", error);
+    }
+
+    error = decoder.receive_frame(&decoded_frame);
+    Utility::error_assert((error >= 0), "Failed to receive frame from audio decoder", error);
+
+    error = 0;
+
+    PortAudio::Stream_Playback playback{};
+
+    // use default host api
+    error = playback.set_host_api_index(-1);
+    Utility::portaudio_error_assert((error >= 0), "Failed to set audio host api", error);
+
+    // set device index
+    error = playback.set_device_index(-1);
+    Utility::portaudio_error_assert((error >= 0), "Failed to set audio device", error);
+
+    enum AVSampleFormat FFMPEG_INPUT_FORMAT{static_cast<enum AVSampleFormat>(decoded_frame->format)};
+    enum AVSampleFormat FFMPEG_OUTPUT_FORMAT;
+    PaSampleFormat PORTAUDIO_OUTPUT_FORMAT;
+    bool SAMPLES_INTERLEAVED{false};
+
+    // determine if resampling is needed, and get the PORTAUDIO_OUTPUT_FORMAT
+    bool RESAMPLING_NEEDED{ Utility::resampling_needed(FFMPEG_INPUT_FORMAT, FFMPEG_OUTPUT_FORMAT, PORTAUDIO_OUTPUT_FORMAT, SAMPLES_INTERLEAVED) };
+
+    // open a playback stream
+    error = playback.open_stream(decoded_frame->channels,   // number of output channels
+            PORTAUDIO_OUTPUT_FORMAT,   // output format
+            shared_vars.audio_latency, // suggested latency -1.0 for default
+            decoded_frame->sample_rate,// sample rate
+            paNoFlag);                 // flags
+    Utility::portaudio_error_assert((error >= 0), "Failed to open portaudio stream", error);
+
+    // varialbes to hold channel layout and sample rate, for resampling, involves less overall calculations
+    int64_t CHANNEL_LAYOUT{av_get_default_channel_layout(decoded_frame->channels)};
+    int SAMPLE_RATE{decoded_frame->sample_rate};
+
+    // setup resampler if appropriate
+    if(RESAMPLING_NEEDED)
+    {
+        resampled_frame = av_frame_alloc();
+        if(!resampled_frame)
+        {
+            std::cerr << "Failed to allocate resampled frame" << std::endl;
+        }
+
+        // create the resampler
+        resampler = swr_alloc_set_opts(resampler,                      // resampling context
+                CHANNEL_LAYOUT,                 // out channel layout
+                FFMPEG_OUTPUT_FORMAT,           // out sample format
+                SAMPLE_RATE,                    // out sample rate
+                CHANNEL_LAYOUT,                 // in channel layout
+                FFMPEG_INPUT_FORMAT,            // in sample format
+                SAMPLE_RATE,                    // in sample rate
+                0,                              // log offset
+                nullptr);                       // log context
+        if(!resampler)
+        {
+            std::cerr << "Failed to setup resampler" << std::endl;    
+            return;
+        }
+
+        // initialize the resampler
+        error = swr_init(resampler);
+        Utility::error_assert((error >= 0), "Failed to initialize resampler", error);
+    }
+
+    // the following code makes sure the audio and video thread start at the same time
+    std::unique_lock<std::mutex> lock{mutex};
+    
+    if(shared_vars.video_playback)
+    {
+        if(shared_vars.video_waiting)
+        {
+            lock.unlock();
+            start_cv.notify_one();
+        }
+        else
+        {
+            shared_vars.audio_waiting = true;
+            start_cv.wait(lock);
+            shared_vars.audio_waiting = false;
+            lock.unlock();
+        }
+    }
+
+    else
+    {
+        lock.unlock();
+    }
+
+    // start the stream
+    error = playback.start_stream();
+    Utility::portaudio_error_assert((error >= 0), "Failed to start playback stream", error);
+
+
+    // main loop
+    while(error != AVERROR(EAGAIN) || !end_of_file_reached)
+    {
+        if(RESAMPLING_NEEDED)
+        {
+            // set needed values
+            resampled_frame->channel_layout = CHANNEL_LAYOUT;
+            resampled_frame->sample_rate = SAMPLE_RATE;
+            resampled_frame->format = static_cast<int>(FFMPEG_OUTPUT_FORMAT);
+
+            // a odd thing seems to happen with .wav files where the channel layout is 0
+            // so we have to calculate and set it otherwise we get errors when resampling
+            decoded_frame->channel_layout = CHANNEL_LAYOUT;
+
+            // resample frame
+            error = swr_convert_frame(resampler, resampled_frame, decoded_frame);
+            Utility::error_assert((error >= 0), "Failed to resample frame", error);
+
+            // play audio
+            if(SAMPLES_INTERLEAVED)
+            {
+                error = playback.write(resampled_frame->extended_data[0], resampled_frame->nb_samples);
+            }
+
+            else
+            {
+                error = playback.write(resampled_frame->extended_data, resampled_frame->nb_samples);
+            }
+
+            Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play resampled frame", error); // -9980 == underrun
+
+            av_frame_unref(resampled_frame);
+        }
+
+        else
+        {
+            // play audio
+            if(SAMPLES_INTERLEAVED) 
+            { 
+                error = playback.write(decoded_frame->extended_data[0], decoded_frame->nb_samples); 
+            }
+
+            else 
+            { 
+                error = playback.write(decoded_frame->extended_data, decoded_frame->nb_samples); 
+            }
+
+            Utility::portaudio_error_assert((error == -9980 || error >= 0), "Failed to play frame", error); // -9980 == underrun
+        }
+
+        error = 0;
+        while(!end_of_file_reached && error != AVERROR(EAGAIN))
+        {
+            error = decoder.send_packet();
+            if(error == AVERROR_EOF)
+            {
+                end_of_file_reached = true;
+                break;
+            }
+            Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to send packet to audio decoder", error);
+        }
+
+        error = decoder.receive_frame(&decoded_frame);
+        Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to receive packet from audio decoder", error);
+    }
+
 }
