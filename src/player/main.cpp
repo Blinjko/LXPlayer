@@ -25,6 +25,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <csignal>
+#include <atomic>
 
 #include <ffmpeg/decoder.h>
 #include <ffmpeg/frame.h>
@@ -53,6 +54,12 @@ struct Shared_Variables
 
     // audio latency in seconds
     double audio_latency;
+
+    std::atomic<bool> paused;
+    std::atomic<bool> audio_paused;
+
+    SDL::Window window;
+    bool fullscreen;
 };
 
 // video stuff
@@ -60,10 +67,13 @@ int render_yuv_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
 int render_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
 void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Scale&, bool, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
 
-void video_playback(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::mutex&);
+void video_playback(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::condition_variable&, std::mutex&);
 
 
-void audio_thread_func(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::mutex&);
+void audio_thread_func(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::condition_variable&, std::mutex&);
+
+void terminal_listen_thread_func(Shared_Variables&, std::condition_variable&);
+
 void sig_interrupt_handler(int signal)
 {
     std::cout << "Interrupted" << std::endl;
@@ -131,7 +141,11 @@ int main(int argc, char **argv)
     shared_vars.video_waiting = false;
     shared_vars.audio_waiting = false;
 
+    std::atomic_store<bool>(&shared_vars.paused, false);
+    std::atomic_store<bool>(&shared_vars.audio_paused, false);
+
     std::condition_variable start_cv;
+    std::condition_variable paused_cv;
     std::mutex mutex;
 
     // start audio thread, will automatically exit if there is no audio playback
@@ -139,16 +153,23 @@ int main(int argc, char **argv)
                              std::ref(audio_decoder),
                              std::ref(shared_vars),
                              std::ref(start_cv),
+                             std::ref(paused_cv),
                              std::ref(mutex)};
 
+    // start a thread to listen for input
+    std::thread listen_thread{terminal_listen_thread_func,
+                              std::ref(shared_vars),
+                              std::ref(paused_cv)};
+    listen_thread.detach();
+
     // the main thread decodes video, will also automatically return if there is no video playback
-    video_playback(video_decoder, shared_vars, start_cv, mutex);
+    video_playback(video_decoder, shared_vars, start_cv, paused_cv, mutex);
 
     audio_thread.join();
     return 0;
 }
 
-void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::mutex &mutex)
+void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
 {
     // check for video playback
     if(!shared_vars.video_playback)
@@ -194,6 +215,7 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
     uint32_t SDL_TEXTURE_FORMAT;
     bool YUV_IMAGE_OUTPUT;
 
+    // check if rescaling is needed for pixel formats, and get SDL output format
     bool RESCALING_NEEDED { Utility::rescaling_needed(FFMPEG_INPUT_FORMAT, FFMPEG_OUTPUT_FORMAT, SDL_TEXTURE_FORMAT) };
 
     // if rescaling is needed, but the FFMPEG_INPUT_FORMAT is not supported then the video cannot be played
@@ -219,26 +241,39 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
 
     SDL::Initializer sdl_initializer{SDL_INIT_VIDEO};
 
-    SDL::Window window{};
     std::string window_title{"LXPlayer"};
     SDL::Renderer renderer{};
     SDL::Texture texture{};
-    //SDL_Rect display_rect;
+    SDL_Rect display_rect;
 
-    const SDL_Rect screen_resolution{Utility::get_native_resolution()};
+    // screen resolution
+    SDL_Rect screen_resolution{Utility::get_native_resolution()};
     Utility::error_assert((screen_resolution.w > 0), "Failed to get native screen resolution");
 
+    // image resolution 
+    SDL_Rect image_resolution;
+    image_resolution.w = decoded_frame->width;
+    image_resolution.h = decoded_frame->height;
+
+    // if the image is too big for the screen, downsize it
+    if(image_resolution.w > screen_resolution.w || image_resolution.h > screen_resolution.h)
+    {
+        Utility::downsize_resolution(image_resolution, screen_resolution);
+        RESCALING_NEEDED = true;
+    }
+
     // create the window
-    window = SDL_CreateWindow(window_title.c_str(),   // Window Title
-                              SDL_WINDOWPOS_CENTERED, // X Position
-                              SDL_WINDOWPOS_CENTERED, // Y Position
-                              screen_resolution.w,    // Width
-                              screen_resolution.h,    // Height
-                              SDL_WINDOW_RESIZABLE);  // Flags
-    Utility::error_assert(window, "Failed to create window");
+    shared_vars.window = SDL_CreateWindow(window_title.c_str(),   // Window Title
+                                          SDL_WINDOWPOS_CENTERED, // X Position
+                                          SDL_WINDOWPOS_CENTERED, // Y Position
+                                          screen_resolution.w,    // Width
+                                          screen_resolution.h,    // Height
+                                          SDL_WINDOW_RESIZABLE);  // Flags
+    Utility::error_assert(shared_vars.window, "Failed to create window");
+    shared_vars.fullscreen = false;
 
     // create the renderer
-    renderer = SDL_CreateRenderer(window, // Window to use
+    renderer = SDL_CreateRenderer(shared_vars.window, // Window to use
                                   -1,     // Driver Index -1 for auto selection
                                   SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); // flags
     Utility::error_assert(renderer, "Failed to create renderer");
@@ -247,17 +282,13 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
     texture = SDL_CreateTexture(renderer,                 // Renderer to use
                                 SDL_TEXTURE_FORMAT,       // Pixel format
                                 SDL_TEXTUREACCESS_STATIC, // Texture access
-                                decoded_frame->width,     // Texture width
-                                decoded_frame->height);   // Texture height
+                                image_resolution.w,       // Texture width
+                                image_resolution.h);      // Texture height
     Utility::error_assert(texture, "Failed to create texture");
 
-    /*
-    // set the display rectangle
-    display_rect.x = (screen_resolution.w - decoded_frame->width) / 2;
-    display_rect.y = (screen_resolution.h - decoded_frame->height) / 2;
-    display_rect.w = decoded_frame->width;
-    display_rect.h = decoded_frame->height;
-    */
+
+    // calculate the display rectangle
+    display_rect = Utility::calculate_display_rectangle(image_resolution, screen_resolution);
 
     // SDL Setup End //
 
@@ -267,8 +298,8 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
         rescaler = sws_getContext(decoded_frame->width,   // source width
                                   decoded_frame->height,  // source height
                                   FFMPEG_INPUT_FORMAT,    // source pixel format
-                                  decoded_frame->width,   // destination width
-                                  decoded_frame->height,  // destination height
+                                  image_resolution.w,     // destination width
+                                  image_resolution.h,     // destination height
                                   FFMPEG_OUTPUT_FORMAT,   // destination pixel format
                                   0,                      // flags
                                   nullptr,                // src filter
@@ -284,6 +315,33 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
     int framerate{stream->r_frame_rate.num / stream->r_frame_rate.den};
     int buffer_size{framerate * 2}; // by default the buffersize is enough frames for 2 seconds
 
+    // Inital Frame Setup //
+    FFmpeg::Frame initial_frame{};
+    error = initial_frame.allocate(FFMPEG_OUTPUT_FORMAT, 
+                                   image_resolution.w,
+                                   image_resolution.h);
+
+    Utility::error_assert((error >= 0), "Failed to allocate initial frame", error);
+
+    // rescale the first image if needed, has to be done before decoding loop is started
+    if(RESCALING_NEEDED)
+    {
+        error = sws_scale(rescaler,                       // Rescaling context to use
+                decoded_frame->data,                      // Source data
+                decoded_frame->linesize,                  // Source linesize
+                0,                                        // Y position in source image
+                decoded_frame->height,                    // height of the source image
+                initial_frame->data,                      // destination data
+                initial_frame->linesize);                 // destination linesize
+
+        Utility::error_assert((error >= 0), "Failed to rescale initial image", error);
+    }
+
+    else
+    {
+        initial_frame.copy(decoded_frame);
+    }
+
     // make an array for the decoded video frames
     FFmpeg::Frame_Array decoded_frames{buffer_size};
 
@@ -293,8 +351,8 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
     for(int i{0}; i != decoded_frames.size(); ++i)
     {
         error = decoded_frames[i].allocate(FFMPEG_OUTPUT_FORMAT,
-                                           decoded_frame->width,
-                                           decoded_frame->height);
+                                           image_resolution.w,
+                                           image_resolution.h);
         Utility::error_assert((error >= 0), "Failed to allocate an AVFrame", error);
     }
 
@@ -312,34 +370,6 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
                                std::ref(spots_empty)};   // Semaphore holding total spots empty / not filled
     
 
-    // Inital Frame Setup //
-    FFmpeg::Frame initial_frame{};
-    error = initial_frame.allocate(FFMPEG_OUTPUT_FORMAT, 
-                                   decoded_frame->width,
-                                   decoded_frame->height);
-
-    Utility::error_assert((error >= 0), "Failed to allocate initial frame", error);
-
-    // rescale the first image if needed
-    if(RESCALING_NEEDED)
-    {
-        error = sws_scale(rescaler,                       // Rescaling context to use
-                decoded_frame->data,                      // Source data
-                decoded_frame->linesize,                  // Source linesize
-                0,                                        // Y position in source image
-                decoded_frame->height,                            // height of the source image
-                initial_frame->data,                      // destination data
-                initial_frame->linesize);                 // destination linesize
-
-        Utility::error_assert((error >= 0), "Failed to rescale initial image", error);
-    }
-
-    else
-    {
-        initial_frame.copy(decoded_frame);
-    }
-
-    // Wait for the decoder thread to fill the buffer / Frame_Array
     while(spots_filled.count() != buffer_size)
     {
     }
@@ -374,25 +404,39 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
     // render the first image
     if(YUV_IMAGE_OUTPUT)
     {
-        error = render_yuv_frame(texture, nullptr, renderer, initial_frame);
+        error = render_yuv_frame(texture, &display_rect, renderer, initial_frame);
         Utility::error_assert((error >= 0), "Failed to render initial YUV frame");
     }
 
     else
     {
-        error = render_frame(texture, nullptr, renderer, initial_frame);
+        error = render_frame(texture, &display_rect, renderer, initial_frame);
         Utility::error_assert((error >= 0), "Failed to render initial frame");
     }
 
     int frames{0};
     int current_index{0};
-//    double wait_time{0.0}; // time spend waiting / paused
+    double wait_time{0.0}; // time spend waiting / paused
 
     auto start_time{std::chrono::steady_clock::now()};
     auto last_frame_time{start_time};
 
     while(1)
     {
+        // check if paused
+        if(std::atomic_load<bool>(&shared_vars.audio_paused))
+        {
+            auto pause_start{std::chrono::steady_clock::now()};
+            // if paused wait until awoken
+            lock.lock();
+            paused_cv.wait(lock);
+            lock.unlock();
+            auto pause_end{std::chrono::steady_clock::now()};
+            std::chrono::duration<double> difference{pause_end - pause_start};
+
+            wait_time += difference.count();
+        }
+
         spots_filled.wait();
 
         if(current_index == decoded_frames.size())
@@ -409,7 +453,7 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
         auto current_time{std::chrono::steady_clock::now()};
         std::chrono::duration<double> difference{current_time - start_time};
 
-        while(difference.count() < frame_display_time)
+        while((difference.count() - wait_time) < frame_display_time)
         {
             current_time = std::chrono::steady_clock::now();
             difference = current_time - start_time;
@@ -417,12 +461,12 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
 
         if(YUV_IMAGE_OUTPUT)
         {
-            error = render_yuv_frame(texture, nullptr, renderer, decoded_frames[current_index]);
+            error = render_yuv_frame(texture, &display_rect, renderer, decoded_frames[current_index]);
             Utility::error_assert((error >= 0), "Failed to render YUV frame");
         }
         else 
         {
-            error = render_frame(texture, nullptr, renderer, decoded_frames[current_index]);
+            error = render_frame(texture, &display_rect, renderer, decoded_frames[current_index]);
             Utility::error_assert((error >= 0), "Failed to render frame");
         }
 
@@ -431,6 +475,7 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
         frames++;
         current_index++;
 
+        /*
         current_time = std::chrono::steady_clock::now();
         difference = current_time - last_frame_time;
 
@@ -441,6 +486,7 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
 
             last_frame_time = current_time;
         }
+        */
     }
 
     decoder_thread.join();
@@ -571,6 +617,8 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
                               decoded_frames[current_index]->data,      // destination data
                               decoded_frames[current_index]->linesize); // destination linesize
 
+            decoded_frames[current_index]->pts = frame->pts;
+
             Utility::error_assert((error >= 0), "Failed to rescale image", error);
 
         }
@@ -593,7 +641,7 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
 }
 
 
-void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::mutex &mutex)
+void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
 {
     // check if audio is being played back
     if(!shared_vars.audio_playback)
@@ -728,6 +776,26 @@ void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, 
     // main loop
     while(error != AVERROR(EAGAIN) || !end_of_file_reached)
     {
+        // check if paused
+        if(std::atomic_load<bool>(&shared_vars.paused))
+        {
+            // stop playback stream
+            error = playback.stop_stream();
+            Utility::portaudio_error_assert((error >= 0), "Failed to pause playback stream", error);
+
+            // set audio_paused to true
+            std::atomic_store<bool>(&shared_vars.audio_paused, true);
+
+            // wait
+            lock.lock();
+            paused_cv.wait(lock);
+            lock.unlock();
+
+            // when awoken start stream again
+            error = playback.start_stream();
+            Utility::portaudio_error_assert((error >= 0), "Failed to resume playback stream", error);
+        }
+
         if(RESAMPLING_NEEDED)
         {
             // set needed values
@@ -791,4 +859,65 @@ void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, 
         Utility::error_assert((error == AVERROR(EAGAIN) || error >= 0), "Failed to receive packet from audio decoder", error);
     }
 
+}
+
+void terminal_listen_thread_func(Shared_Variables &shared_vars, std::condition_variable &paused_cv)
+{
+    std::cout << "Commands: " << std::endl;
+    std::cout << "pause" << std::endl;
+    std::cout << "play" << std::endl;
+    std::cout << "exit" << std::endl;
+
+    std::string input{};
+
+    while(1)
+    {
+        input = "";
+
+        std::cout << "Type a command: ";
+        std::getline(std::cin, input);
+
+        if(input == "pause" && !std::atomic_load<bool>(&shared_vars.paused))
+        {
+            std::cout << "Playback paused" << std::endl;
+            std::atomic_store<bool>(&shared_vars.paused, true);
+        }
+
+        else if(input == "play" && std::atomic_load<bool>(&shared_vars.paused))
+        {
+            std::cout << "Resuming playback" << std::endl;
+            std::atomic_store<bool>(&shared_vars.paused, false);
+            std::atomic_store<bool>(&shared_vars.audio_paused, false);
+
+            paused_cv.notify_all();
+        }
+
+        else if(input == "exit")
+        {
+            std::exit(0);
+        }
+
+        else if(input == "fullscreen")
+        {
+            if(shared_vars.fullscreen)
+            {
+                int error{0};
+                error = SDL_SetWindowFullscreen(shared_vars.window, 0);
+                Utility::error_assert((error >= 0), "Failed to fullscreen window");
+                shared_vars.fullscreen = false;
+            }
+            else
+            {
+                int error{0};
+                error = SDL_SetWindowFullscreen(shared_vars.window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                Utility::error_assert((error >= 0), "Failed to fullscreen window");
+                shared_vars.fullscreen = true;
+            }
+        }
+
+        else
+        {
+            std::cout << "Unkown command" << std::endl;
+        }
+    }
 }

@@ -238,6 +238,99 @@ namespace Utility
         }
     }
 
+    // downsize src resolution to >= dst resolution
+    // the only time this wont work is if the source resolution width and height are prime numbers
+    void downsize_resolution(SDL_Rect &src_res, SDL_Rect &dst_res)
+    {
+        for(int i{2}; (i != src_res.w) && (i != src_res.h); ++i)
+        {
+            if((src_res.w % i == 0) && (src_res.h % i == 0))
+            {
+                src_res.w /= i;
+                src_res.h /= i;
+                i = 1;
+            }
+
+            if((src_res.w <= dst_res.w) && (src_res.h <= dst_res.h))
+            {
+                break;
+            }
+        }
+    }
+
+    // calculate the display rectangle given the image size and display size
+    SDL_Rect calculate_display_rectangle(SDL_Rect &src_res, SDL_Rect &dst_res)
+    {
+        double scaled_src_width{static_cast<double>(src_res.w)};
+        double scaled_src_height{static_cast<double>(src_res.h)};
+
+        double scaled_dst_width{static_cast<double>(dst_res.w)};
+        double scaled_dst_height{static_cast<double>(dst_res.h)};
+
+
+        // this if / else statement finds a common ground bewteen src_res and dst_res
+        // this is needed to calculate the difference in pixels beween src_res and dst_res
+        if(src_res.w >= dst_res.w)
+        {
+            double scale_multiplier{ static_cast<double>(src_res.w) / dst_res.w};
+
+            scaled_dst_width = scale_multiplier * dst_res.w;
+            scaled_dst_height = scale_multiplier * dst_res.h;
+
+            if(scaled_dst_height < static_cast<double>(src_res.h))
+            {
+                scale_multiplier = static_cast<double>(src_res.h) / dst_res.h;
+
+                scaled_dst_width = scale_multiplier * dst_res.w;
+                scaled_dst_height = scale_multiplier * dst_res.h;
+            }
+        }
+
+        else
+        {
+            double scale_multiplier{ static_cast<double>(dst_res.w) / src_res.w};
+
+            scaled_src_width = scale_multiplier * src_res.w;
+            scaled_src_height = scale_multiplier * src_res.h;
+
+            if(scaled_src_height > static_cast<double>(dst_res.h))
+            {
+                scale_multiplier = static_cast<double>(dst_res.h) / src_res.h;
+
+                scaled_src_width = scale_multiplier * src_res.w;
+                scaled_src_height = scale_multiplier * src_res.h;
+            }
+        }
+
+        SDL_Rect rect;
+
+        if(scaled_src_width == scaled_dst_width)
+        {
+            rect.x = 0;
+            rect.w = dst_res.w;
+        }
+
+        else
+        {
+            rect.x = static_cast<int>(scaled_dst_width - scaled_src_width) / 2;
+            rect.w = static_cast<int>(scaled_src_width);
+        }
+
+        if(scaled_src_height == scaled_dst_height)
+        {
+            rect.y = 0;
+            rect.h = dst_res.h;
+        }
+
+        else
+        {
+            rect.y = static_cast<int>(scaled_dst_height - scaled_src_height) / 2;
+            rect.h = static_cast<int>(scaled_src_height);
+        }
+
+        return rect;
+    }
+
 
     // function that dictates wheather audio resampling is needed
     // If conversion is needed, output_format will be set to the appropriate AVSampleFormat, otherise it will be the same as input_format

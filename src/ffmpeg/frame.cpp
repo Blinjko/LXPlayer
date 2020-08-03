@@ -53,7 +53,7 @@ namespace FFmpeg
         m_frame->width = width;
         m_frame->height = height;
 
-        error = av_frame_get_buffer(m_frame, 16);
+        error = av_frame_get_buffer(m_frame, 0);
 
         return error;
     }

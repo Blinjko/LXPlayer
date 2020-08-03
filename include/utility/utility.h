@@ -36,6 +36,13 @@ namespace Utility
     bool rescaling_needed(enum AVPixelFormat, enum AVPixelFormat&, uint32_t&);
     bool valid_rescaling_input(enum AVPixelFormat);
 
+    // downsize src resolution to >= dst resolution
+    void downsize_resolution(SDL_Rect&, SDL_Rect&);
+
+    // calculate the display rectangle given the image size and display size
+    SDL_Rect calculate_display_rectangle(SDL_Rect&, SDL_Rect&);
+
     // function to dictate weather resampling is needed
     bool resampling_needed(enum AVSampleFormat, enum AVSampleFormat&, PaSampleFormat&, bool&);
+
 }
