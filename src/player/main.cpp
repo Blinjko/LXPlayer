@@ -26,6 +26,9 @@
 #include <condition_variable>
 #include <csignal>
 #include <atomic>
+#include <algorithm>
+#include <random>
+#include <vector>
 
 #include <ffmpeg/decoder.h>
 #include <ffmpeg/frame.h>
@@ -57,22 +60,28 @@ struct Shared_Variables
 
     std::atomic<bool> paused;
     std::atomic<bool> audio_paused;
+    std::atomic<bool> skipping;
 
     SDL::Window window;
     bool fullscreen;
+
 };
 
 // video stuff
 int render_yuv_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
 int render_frame(SDL::Texture&, SDL_Rect*, SDL::Renderer&, AVFrame*);
-void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Scale&, bool, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&);
+void decoder_thread_function(FFmpeg::Decoder&, FFmpeg::Scale&, bool, FFmpeg::Frame_Array&, Utility::Semaphore&, Utility::Semaphore&, Shared_Variables&);
 
-void video_playback(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::condition_variable&, std::mutex&);
+void video_playback(FFmpeg::Decoder&, Shared_Variables&, int&, std::condition_variable&, std::condition_variable&, std::mutex&);
 
 
-void audio_thread_func(FFmpeg::Decoder&, Shared_Variables&, std::condition_variable&, std::condition_variable&, std::mutex&);
+void audio_thread_func(FFmpeg::Decoder&, Shared_Variables&, int&, std::condition_variable&, std::condition_variable&, std::mutex&);
 
-void terminal_listen_thread_func(Shared_Variables&, std::condition_variable&);
+// this listening function is active when there is only audio and no video
+void terminal_listen_thread_func(Shared_Variables&, int&, std::condition_variable&);
+
+// this listening function is active when there is video
+void sdl_listen_thread_func(Shared_Variables&, int&, std::condition_variable&);
 
 void sig_interrupt_handler(int signal)
 {
@@ -86,90 +95,187 @@ void sig_terminate_handler(int signal)
     std::exit(signal);
 }
 
+void print_help(const std::string &program_name)
+{
+    std::cout << "Usage: " << program_name << " [OPTIONS]... [FILES]..." << std::endl;
+    std::cout << "Options: " << std::endl;
+    std::cout << "--help          prints this help and exit" << std::endl;
+    std::cout << "--shuffle       shuffle the given files" << std::endl;
+    std::cout << "--audio-only    only play audio, no video" << std::endl;
+    std::cout << "--video-only    only play video, no audio" << std::endl;
+    std::cout << "Note: Repeated Options will be ignored" << std::endl;
+}
+
+void shuffle_files(std::vector<std::string>&);
+
 int main(int argc, char **argv)
 {
-    if(argc != 2)
+    if(argc < 2)
     {
-        std::cerr << "Invalid Usage" << std::endl;
-        std::cerr << "Valid Usage: " << argv[0] << " <filename>" << std::endl;
+        std::cerr << "Invalid Usage, not enough arguments" << std::endl;
+        print_help(argv[0]);
         return 1;
     }
+
+    else if(argc == 2)
+    {
+        std::string arg_one{argv[1]};
+
+        if(arg_one == "--shuffle")
+        {
+            std::cerr << "Invalid Usage, no files passsed" << std::endl;
+            print_help(argv[0]);
+            return 1;
+        }
+
+        else if(arg_one == "--help")
+        {
+            print_help(argv[0]);
+            return 1;
+        }
+    }
+    
 
     // Setup Signals
     std::signal(SIGINT, sig_interrupt_handler);
     std::signal(SIGTERM, sig_terminate_handler);
 
 
-    // put passed filename into std::string
-    std::string filename{argv[1]};
+    std::vector<std::string> files;
+    bool shuffle{false};
+    bool audio_only{false};
+    bool video_only{false};
 
-    // setup decoder and shared variables
-    FFmpeg::Decoder video_decoder{};
-    FFmpeg::Decoder audio_decoder{};
-    Shared_Variables shared_vars{};
-
-    shared_vars.audio_playback = true;
-    shared_vars.video_playback = true;
-
-    int error{0};
-
-    // open the file for both decoders
-    error = video_decoder.init_format_context(filename, nullptr);
-    Utility::error_assert((error >= 0), "Failed to open file, video decoder", error);
-
-    error = audio_decoder.init_format_context(filename, nullptr);
-    Utility::error_assert((error >= 0), "Failed to open file, audio decoder", error);
-
-    // try to find video stream
-    error = video_decoder.find_stream(AVMEDIA_TYPE_VIDEO);
-    if(error == AVERROR_STREAM_NOT_FOUND)
+    for(int i{1}; i != argc; ++i)
     {
-        shared_vars.video_playback = false;
-        error = 0;
+        std::string current_argument{argv[i]};
+
+        if(current_argument == "--shuffle")
+        {
+            shuffle = true;
+        }
+
+        else if(current_argument == "--audio-only")
+        {
+            audio_only = true;
+        }
+
+        else if(current_argument == "--video-only")
+        {
+            video_only = true;
+        }
+
+        else if(current_argument == "--help")
+        {
+            print_help(argv[0]);
+            return 1;
+        }
+
+        else
+        {
+            files.push_back(current_argument);
+        }
     }
-    Utility::error_assert((error >= 0), "Failed to find video stream", error);
 
-    // try to find audio stream
-    error = audio_decoder.find_stream(AVMEDIA_TYPE_AUDIO);
-    if(error == AVERROR_STREAM_NOT_FOUND)
+    if(shuffle)
     {
+        shuffle_files(files);
+    }
+
+    // Static cast is used to suppress complier warning
+    for(int i{0}; i != static_cast<int>(files.size()); ++i)
+    {
+
+        std::string &filename{files.at(i)};
+
+        // setup decoder and shared variables
+        FFmpeg::Decoder video_decoder{};
+        FFmpeg::Decoder audio_decoder{};
+        Shared_Variables shared_vars{};
+
         shared_vars.audio_playback = false;
-        error = 0;
+        shared_vars.video_playback = false;
+
+        int error{0};
+
+        if(!audio_only)
+        {
+            // open the file
+            error = video_decoder.init_format_context(filename, nullptr);
+            if(error < 0)
+            {
+                Utility::print_error("Failed to open file, video decoder", error);
+                continue;
+            }
+
+            // find a stream
+            error = video_decoder.find_stream(AVMEDIA_TYPE_VIDEO);
+
+            if(error < 0 && error != AVERROR_STREAM_NOT_FOUND)
+            {
+                Utility::print_error("Failed to find video stream", error);
+            }
+
+            else
+            {
+                shared_vars.video_playback = true;
+            }
+        }
+
+        if(!video_only)
+        {
+            // open the file
+            error = audio_decoder.init_format_context(filename, nullptr);
+            if(error < 0)
+            {
+                Utility::print_error("Failed to open file, audio decoder", error);
+                continue;
+            }
+
+            // find a stream
+            error = audio_decoder.find_stream(AVMEDIA_TYPE_AUDIO);
+
+            if(error < 0 && error != AVERROR_STREAM_NOT_FOUND)
+            {
+                Utility::print_error("Failed to find audio stream", error);
+                shared_vars.audio_playback = false;
+            }
+            
+            else
+            {
+                shared_vars.audio_playback = true;
+            }
+        }
+
+        shared_vars.video_waiting = false;
+        shared_vars.audio_waiting = false;
+
+        std::atomic_store<bool>(&shared_vars.paused, false);
+        std::atomic_store<bool>(&shared_vars.audio_paused, false);
+
+        std::condition_variable start_cv;
+        std::condition_variable paused_cv;
+        std::mutex mutex;
+
+        // start audio thread, will automatically exit if there is no audio playback
+        std::thread audio_thread{audio_thread_func,
+                                 std::ref(audio_decoder),
+                                 std::ref(shared_vars),
+                                 std::ref(i),
+                                 std::ref(start_cv),
+                                 std::ref(paused_cv),
+                                 std::ref(mutex)};
+
+
+        // the main thread decodes video, will also automatically return if there is no video playback
+        video_playback(video_decoder, shared_vars, i, start_cv, paused_cv, mutex);
+
+        audio_thread.join();
     }
-    Utility::error_assert((error >= 0), "Failed to find audio stream", error);
-
-    shared_vars.video_waiting = false;
-    shared_vars.audio_waiting = false;
-
-    std::atomic_store<bool>(&shared_vars.paused, false);
-    std::atomic_store<bool>(&shared_vars.audio_paused, false);
-
-    std::condition_variable start_cv;
-    std::condition_variable paused_cv;
-    std::mutex mutex;
-
-    // start audio thread, will automatically exit if there is no audio playback
-    std::thread audio_thread{audio_thread_func,
-                             std::ref(audio_decoder),
-                             std::ref(shared_vars),
-                             std::ref(start_cv),
-                             std::ref(paused_cv),
-                             std::ref(mutex)};
-
-    // start a thread to listen for input
-    std::thread listen_thread{terminal_listen_thread_func,
-                              std::ref(shared_vars),
-                              std::ref(paused_cv)};
-    listen_thread.detach();
-
-    // the main thread decodes video, will also automatically return if there is no video playback
-    video_playback(video_decoder, shared_vars, start_cv, paused_cv, mutex);
-
-    audio_thread.join();
     return 0;
 }
 
-void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
+void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, int &current_file_index, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
 {
     // check for video playback
     if(!shared_vars.video_playback)
@@ -367,12 +473,21 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
                                RESCALING_NEEDED,         // a boolean indicating to rescale the image
                                std::ref(decoded_frames), // Frame_Array to store decoded frames
                                std::ref(spots_filled),   // Semaphore holding total spots filled
-                               std::ref(spots_empty)};   // Semaphore holding total spots empty / not filled
-    
+                               std::ref(spots_empty),    // Semaphore holding total spots empty / not filled
+                               std::ref(shared_vars)};
 
     while(spots_filled.count() != buffer_size)
     {
     }
+
+    // start the listening thread
+    std::thread listen_thread{sdl_listen_thread_func,
+                              std::ref(shared_vars),
+                              std::ref(current_file_index),
+                              std::ref(paused_cv)};
+
+    // detach the listening thread
+    listen_thread.detach();
 
     // make sure audio thread and video thread, this thread, start at the same time
     std::unique_lock<std::mutex> lock{mutex};
@@ -414,7 +529,6 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
         Utility::error_assert((error >= 0), "Failed to render initial frame");
     }
 
-    int frames{0};
     int current_index{0};
     double wait_time{0.0}; // time spend waiting / paused
 
@@ -426,6 +540,12 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
         // check if paused
         if(std::atomic_load<bool>(&shared_vars.audio_paused))
         {
+            // check if skipping
+            if(std::atomic_load<bool>(&shared_vars.skipping))
+            {
+                break;
+            }
+
             auto pause_start{std::chrono::steady_clock::now()};
             // if paused wait until awoken
             lock.lock();
@@ -435,6 +555,12 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
             std::chrono::duration<double> difference{pause_end - pause_start};
 
             wait_time += difference.count();
+
+            // check if skipping
+            if(std::atomic_load<bool>(&shared_vars.skipping))
+            {
+                break;
+            }
         }
 
         spots_filled.wait();
@@ -472,21 +598,7 @@ void video_playback(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std
 
         spots_empty.post();
 
-        frames++;
         current_index++;
-
-        /*
-        current_time = std::chrono::steady_clock::now();
-        difference = current_time - last_frame_time;
-
-        if(difference.count() >= 1.0)
-        {
-            std::cout << "Frames: " << frames << std::endl;
-            frames = 0;
-
-            last_frame_time = current_time;
-        }
-        */
     }
 
     decoder_thread.join();
@@ -571,7 +683,8 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
                              bool RESCALING_NEEDED,
                              FFmpeg::Frame_Array &decoded_frames,
                              Utility::Semaphore &spots_filled,
-                             Utility::Semaphore &spots_empty)
+                             Utility::Semaphore &spots_empty,
+                             Shared_Variables &shared_vars)
 {
     bool end_of_file_reached{false};
     int current_index{0};
@@ -607,6 +720,11 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
 
         spots_empty.wait();
 
+        if(std::atomic_load<bool>(&shared_vars.skipping))
+        {
+            break;
+        }
+
         if(RESCALING_NEEDED)
         {
             error = sws_scale(rescaler,                                 // Rescaling context to use
@@ -641,7 +759,7 @@ void decoder_thread_function(FFmpeg::Decoder &decoder,
 }
 
 
-void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
+void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, int &current_file_index, std::condition_variable &start_cv, std::condition_variable &paused_cv, std::mutex &mutex)
 {
     // check if audio is being played back
     if(!shared_vars.audio_playback)
@@ -744,6 +862,15 @@ void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, 
         Utility::error_assert((error >= 0), "Failed to initialize resampler", error);
     }
 
+
+    // start a thread to listen for input from terminal, will exit if there is video playback
+    std::thread listen_thread{terminal_listen_thread_func,
+                              std::ref(shared_vars),
+                              std::ref(current_file_index),
+                              std::ref(paused_cv)};
+
+    listen_thread.detach();
+
     // the following code makes sure the audio and video thread start at the same time
     std::unique_lock<std::mutex> lock{mutex};
     
@@ -786,10 +913,22 @@ void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, 
             // set audio_paused to true
             std::atomic_store<bool>(&shared_vars.audio_paused, true);
 
+            // check if skipping
+            if(std::atomic_load<bool>(&shared_vars.skipping))
+            {
+                break;
+            }
+
             // wait
             lock.lock();
             paused_cv.wait(lock);
             lock.unlock();
+
+            // check if skipping
+            if(std::atomic_load<bool>(&shared_vars.skipping))
+            {
+                break;
+            }
 
             // when awoken start stream again
             error = playback.start_stream();
@@ -861,11 +1000,19 @@ void audio_thread_func(FFmpeg::Decoder &decoder, Shared_Variables &shared_vars, 
 
 }
 
-void terminal_listen_thread_func(Shared_Variables &shared_vars, std::condition_variable &paused_cv)
+void terminal_listen_thread_func(Shared_Variables &shared_vars, int &current_file_index, std::condition_variable &paused_cv)
 {
+    // if there is video exit the function, another will be used
+    if(shared_vars.video_playback)
+    {
+        return;
+    }
+
     std::cout << "Commands: " << std::endl;
     std::cout << "pause" << std::endl;
     std::cout << "play" << std::endl;
+    std::cout << "next" << std::endl;
+    std::cout << "prev" << std::endl;
     std::cout << "exit" << std::endl;
 
     std::string input{};
@@ -915,9 +1062,151 @@ void terminal_listen_thread_func(Shared_Variables &shared_vars, std::condition_v
             }
         }
 
+        else if(input == "next")
+        {
+            std::atomic_store<bool>(&shared_vars.skipping, true);
+
+            if(std::atomic_load<bool>(&shared_vars.paused))
+            {
+                paused_cv.notify_all();
+                return;
+            }
+
+            std::atomic_store<bool>(&shared_vars.paused, true);
+            return;
+        }
+
+        else if(input == "prev")
+        {
+            std::atomic_store<bool>(&shared_vars.skipping, true);
+
+            if(current_file_index == 0)
+            {
+                std::cout << "Cannot goto previous file, already at first file" << std::endl;
+                current_file_index--;
+            }
+
+            else
+            {
+                current_file_index -= 2;
+            }
+
+            if(std::atomic_load<bool>(&shared_vars.paused))
+            {
+                paused_cv.notify_all();
+                return;
+            }
+
+            std::atomic_store<bool>(&shared_vars.paused, true);
+            return;
+        }
+
         else
         {
             std::cout << "Unkown command" << std::endl;
         }
     }
+}
+
+void sdl_listen_thread_func(Shared_Variables &shared_vars, int &current_file_index, std::condition_variable &paused_cv)
+{
+    int error{0};
+
+    while(1)
+    {
+        // wait for an event
+        SDL_Event event;
+        error = SDL_WaitEvent(&event);
+        Utility::error_assert((error == 1), "Failed to wait for event");
+
+        // key press event
+        if(event.type == SDL_KEYDOWN)
+        {
+            SDL_KeyboardEvent *key_event{reinterpret_cast<SDL_KeyboardEvent*>(&event)};
+            SDL_KeyCode key_code{ static_cast<SDL_KeyCode>(key_event->keysym.sym) };
+
+            if(key_code == SDLK_SPACE && !std::atomic_load<bool>(&shared_vars.paused))
+            {
+                std::atomic_store<bool>(&shared_vars.paused, true);
+            }
+
+            else if(key_code == SDLK_SPACE && std::atomic_load<bool>(&shared_vars.paused))
+            {
+                std::atomic_store<bool>(&shared_vars.paused, false);
+                std::atomic_store<bool>(&shared_vars.audio_paused, false);
+
+                paused_cv.notify_all();
+            }
+
+            else if(key_code == SDLK_q)
+            {
+                std::exit(0);
+            }
+
+            else if(key_code == SDLK_f)
+            {
+                if(shared_vars.fullscreen)
+                {
+                    int error{0};
+                    error = SDL_SetWindowFullscreen(shared_vars.window, 0);
+                    Utility::error_assert((error >= 0), "Failed to fullscreen window");
+                    shared_vars.fullscreen = false;
+                }
+                else
+                {
+                    int error{0};
+                    error = SDL_SetWindowFullscreen(shared_vars.window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    Utility::error_assert((error >= 0), "Failed to fullscreen window");
+                    shared_vars.fullscreen = true;
+                }
+            }
+
+            else if(key_code == SDLK_n)
+            {
+                std::atomic_store<bool>(&shared_vars.skipping, true);
+
+                if(std::atomic_load<bool>(&shared_vars.paused))
+                {
+                    paused_cv.notify_all();
+                    return;
+                }
+
+                std::atomic_store<bool>(&shared_vars.paused, true);
+                return;
+            }
+
+            else if(key_code == SDLK_p)
+            {
+                std::atomic_store<bool>(&shared_vars.skipping, true);
+
+                if(current_file_index == 0)
+                {
+                    std::cout << "Cannot goto previous file, already at first file" << std::endl;
+                    current_file_index--;
+                }
+
+                else
+                {
+                    current_file_index -= 2;
+                }
+
+                if(std::atomic_load<bool>(&shared_vars.paused))
+                {
+                    paused_cv.notify_all();
+                    return;
+                }
+
+                std::atomic_store<bool>(&shared_vars.paused, true);
+                return;
+            }
+
+        }
+    }
+}
+
+void shuffle_files(std::vector<std::string> &files)
+{
+    static std::mt19937_64 mt{static_cast<std::size_t>(std::time(nullptr))};
+
+    std::shuffle(files.begin(), files.end(), mt);
 }
