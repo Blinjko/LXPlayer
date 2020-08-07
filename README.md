@@ -19,14 +19,14 @@ There are two programs to build, **LXPlayer**, and **AudioPlayer**. To build the
 
 # Usage #
 ## LXPlayer ##
-A general usage example would be ```LXPlayer file1.mp4 file2.mkv ...```, this would play file1 and file2 in the specified order.
+A general usage example would be ```LXPlayer file1.mp4 file2.mkv ...```, this would play file1 and file2 in the specified order.  
 Other options:  
 1. ```--shuffle``` Shuffles the files passed to LXPlayer
 2. ```--audio-only``` Just plays audio, no video
 3. ```--video-only``` Just plays video, no audio
 4. ```--help``` Displays a help message  
 
-If video is being played, the video & audio can be paused / unpaused by pressing **space**, the player can be exited with **q**, the current video can be skipped with **n**, and to go-to the previous video press **p**.
+If video is being played, the video & audio can be paused / unpaused by pressing **space**, the player can be exited with **q**, the current video can be skipped with **n**, and to go-to the previous video press **p**.  
 If just audio is being played, then the program will read commands from stdin, the commands are:  
 1. ```pause```
 2. ```play```
